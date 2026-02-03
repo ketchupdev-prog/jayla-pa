@@ -1,0 +1,25 @@
+[project]
+name = "jayla-pa"
+version = "0.1.0"
+description = "Jayla personal assistant (PA) — LangGraph + Arcade + Neon + Qdrant"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph",
+    "langchain-core",
+    "langchain-groq",
+    "langchain-deepseek",
+    "langchain-arcade",
+    "langchain-community",
+    "qdrant-client",
+    "sentence-transformers",
+    "python-dotenv",
+    "fastapi",
+    "uvicorn",
+    "python-telegram-bot",
+    "docling",
+    "psycopg2-binary",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]

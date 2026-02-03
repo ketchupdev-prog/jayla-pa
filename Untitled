@@ -1,0 +1,30 @@
+## A. Project structure
+
+```
+jayla-pa/
+├── .env.example
+├── pyproject.toml
+├── requirements.txt
+├── langgraph.json
+├── configuration.py
+├── graph.py
+├── nodes.py
+├── agent.py
+├── tools.py
+├── memory.py
+├── rag.py
+├── prompts.py
+├── pa_cli.py
+├── sql/
+│   ├── 0-extensions.sql
+│   ├── 1-projects-tasks.sql
+│   └── 2-rag-documents.sql
+├── telegram_bot/
+│   ├── client.py
+│   └── webhook.py
+├── tools_custom/
+│   ├── gmail_attachment.py
+│   └── project_tasks.py
+└── scripts/
+    ├── run_sql_migrations.py
+    └── set_telegram_webhook.py
