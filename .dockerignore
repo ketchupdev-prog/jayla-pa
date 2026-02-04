@@ -13,3 +13,5 @@ __pycache__/
 *.md
 !README.md
 uv.lock
+pyproject.toml
+nixpacks.toml

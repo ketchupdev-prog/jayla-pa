@@ -2,7 +2,9 @@
 # When using the Dockerfile, do NOT set startCommand here: Railway runs it without a shell,
 # so $PORT is not expanded and uvicorn gets the literal "$PORT". The Dockerfile CMD uses
 # sh -c "exec uvicorn ... --port ${PORT:-8000}" so PORT is expanded correctly.
-# Do NOT set builder = "nixpacks" — use the Dockerfile for fast, slim builds.
+# Force Dockerfile so Railway does not use Railpack/Nixpacks (which can use pyproject/uv = slow).
+[build]
+builder = "DOCKERFILE"
 
 [deploy]
 # startCommand left unset so Dockerfile CMD is used (shell expands $PORT)
