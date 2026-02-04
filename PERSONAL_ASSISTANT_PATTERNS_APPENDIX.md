@@ -2,7 +2,9 @@
 
 # Appendix: Full Project Architecture, Structure, Workflows & Code (Jayla-PA)
 
-> Reference implementation for **jayla-pa**: single-user PA with user profiles and onboarding (Neon), Qdrant for conversations + long-term memory, Neon for project management + RAG, Arcade for Gmail/Calendar, LangGraph agent → authorization → tools → agent. Code below is aligned with the **jayla-pa** codebase.
+> Reference implementation for **jayla-pa**: single-user PA with user profiles and onboarding (Neon), **Postgres checkpointer** for conversation persistence, **Qdrant** for long-term memory (read + write), Neon for project management + RAG, Arcade for Gmail/Calendar, LangGraph agent → authorization → tools → agent. Code below is aligned with the **jayla-pa** codebase.
+>
+> **Principle: an assistant that can’t remember is not acceptable.** (1) **Conversation persistence** — use a Postgres checkpointer (e.g. `AsyncPostgresSaver`) so messages and tool outputs persist across restarts; current code uses `MemorySaver()` (dev-only). (2) **Long-term memory writing** — when the user says “remember X”, the graph must extract and call `put_memory` so Qdrant is populated; currently only read (`get_memories`) is wired. See **PERSONAL_ASSISTANT_PATTERNS.md** §1.1, §2.3 and **docs/WHERE_DATA_IS_STORED.md**.
 
 ---
 
@@ -78,13 +80,19 @@ flowchart LR
 
 **ASCII:** `START → agent → [authorization | tools | END]; tools → agent` (loop).
 
-### B.2 Data stack (Qdrant + Neon)
+### B.2 Data stack (Postgres checkpointer + Qdrant + Neon)
+
+- **Conversations** (messages, tool calls, tool outputs) → **Postgres checkpointer** (Neon). Required for production so the assistant remembers past engagements across restarts. Use `AsyncPostgresSaver`; `MemorySaver()` is dev-only.
+- **Long-term memory** (“remember X”) → **Qdrant**. Read: `get_memories` → inject `memory_context`. Write: when user says “remember X”, extract fact and call `put_memory` (memory extraction node or tool). Both read and write are required.
+- **Neon**: user_profiles + onboarding, projects, tasks, RAG documents, and checkpointer tables.
 
 ```mermaid
 flowchart TB
+    subgraph Checkpointer[Postgres checkpointer - Neon]
+        conv[Conversations / messages / tool outputs]
+    end
     subgraph Qdrant
-        conv[Conversations]
-        ltm[Long-term memory]
+        ltm[Long-term memory - read + write]
     end
     subgraph Neon
         profiles[user_profiles + onboarding]
@@ -150,6 +158,8 @@ class Configuration:
 
 ### C.2 graph.py (arcade_1_basics + pa_agent; jayla-pa uses lazy _tools_node)
 
+**Checkpointer (production):** An assistant that can’t remember past conversations is not acceptable. Use `MemorySaver()` only for local/dev. For production **must** pass a Postgres checkpointer (e.g. `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`) using `DATABASE_URL` so conversation history persists. See PERSONAL_ASSISTANT_PATTERNS.md §2.3 and docs/WHERE_DATA_IS_STORED.md.
+
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -169,7 +179,7 @@ def build_graph(checkpointer=None):
     workflow.add_conditional_edges("agent", should_continue, ["authorization", "tools", END])
     workflow.add_edge("authorization", "tools")
     workflow.add_edge("tools", "agent")
-    memory = checkpointer or MemorySaver()
+    memory = checkpointer or MemorySaver()  # Production: pass AsyncPostgresSaver
     return workflow.compile(checkpointer=memory)
 ```
 
@@ -352,7 +362,9 @@ def get_tool_node():
 
 ### C.6 memory.py (Qdrant — Ava-style)
 
-*(Same as arcade-ai-agent C.6; use get_memory_namespace, get_memories, put_memory.)*
+**Read:** `get_memory_namespace`, `get_memories(store, namespace, query)` — used in agent to inject `memory_context` into the system prompt.
+
+**Write (required so the assistant remembers):** `put_memory(store, namespace, data)` must be called from the graph when the user says “remember X” (or similar). Options: (1) a **memory extraction node** after the agent that uses MEMORY_ANALYSIS_PROMPT to detect memory-worthy facts and calls `put_memory`; (2) a **tool** the agent calls, e.g. `save_memory(data)`, that calls `put_memory`. Without writing, Qdrant stays empty and `memory_context` is always “(None)”. See PERSONAL_ASSISTANT_PATTERNS.md §1.1 and docs/WHERE_DATA_IS_STORED.md.
 
 ### C.7 prompts.py (jayla-pa: user_context known/unknown, onboarding_context)
 

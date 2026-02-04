@@ -1,6 +1,7 @@
 # See PERSONAL_ASSISTANT_PATTERNS.md C.14
 # Neon: use psycopg2-binary (no PyPI package "neon-serverless" for Python)
 langgraph
+langgraph-checkpoint-postgres
 langchain-core
 langchain-groq
 langchain-deepseek

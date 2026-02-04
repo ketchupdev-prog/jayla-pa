@@ -206,6 +206,8 @@ jayla-pa/
 └── scripts/
     ├── run_sql_migrations.py
     ├── init_qdrant.py      # Create Qdrant collection (idempotent)
+    ├── setup_checkpointer.py  # Create Postgres checkpointer tables (conversation persistence)
+    ├── inspect_qdrant.py   # List collections, point count, sample memories
     ├── set_telegram_webhook.py
     ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
     ├── curl_deployed.sh   # Curl GET /, GET /health, POST /webhook (set BASE_URL)
@@ -325,6 +327,7 @@ uv pip install -r requirements.txt
 # copy .env.example to .env and set DATABASE_URL, ARCADE_API_KEY, QDRANT_URL, etc.
 python scripts/run_sql_migrations.py
 python scripts/init_qdrant.py   # optional: Qdrant memory collection
+python scripts/setup_checkpointer.py   # optional: Postgres checkpointer tables (webhook also runs this on startup)
 python pa_cli.py
 ```
 
@@ -337,5 +340,6 @@ python pa_cli.py
 - **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
 - **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
 - **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
+- **Conversation persistence (production):** When **`DATABASE_URL`** is set, the webhook uses a **Postgres checkpointer** (`AsyncPostgresSaver`) so conversation history (messages, tool calls, tool outputs) persists across restarts. Without `DATABASE_URL`, the app falls back to **MemorySaver** (in-memory only). Long-term "remember X" facts are read from **Qdrant** but nothing writes to it yet. See **docs/WHERE_DATA_IS_STORED.md**.
 - **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). **Local/CLI (full deps):** Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (bytes→text via Docling or PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). **Railway (slim image, under 4GB):** Parse uses PyPDF2/docx2txt only; embedding is not available, so ingest returns a friendly message—add documents via CLI or local for full RAG. After ingest (when embedding is available), Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
 - **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.

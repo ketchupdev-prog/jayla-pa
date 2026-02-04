@@ -2,6 +2,8 @@
 
 > Synthesized from **arcade-ai-agent**, **pa-agent**, **pa-agent2**, and **pa-agent3** for building **jayla-pa**: single-user PA with Gmail, Calendar, Telegram, user profiles, onboarding, and optional RAG.
 
+**Principle: an assistant that can’t remember is not acceptable.** Conversation history (messages, tool calls, tool outputs) and long-term facts (“remember X”) must persist. Use a **Postgres checkpointer** for conversation persistence and **Qdrant + memory writing** for long-term semantic memory so the assistant retains past engagements and user-stated facts. See §1.1 and §2.3; implementation status in **docs/WHERE_DATA_IS_STORED.md**.
+
 ---
 
 ## 1. Architecture Overview
@@ -15,14 +17,15 @@
 | **User identity** | **User profiles** (Neon `user_profiles`: name, role, company + onboarding fields); `thread_id` per Telegram chat; same `user_id` (e.g. `EMAIL`) for Arcade | jayla-pa user_profile.py, ONBOARDING_PLAN.md |
 | **Token limits** | Truncate tool outputs (strip HTML, cap chars) before adding to conversation | arcade_1_basics |
 
-### 1.1 Data stack: Qdrant + Neon
+### 1.1 Data stack: Postgres checkpointer + Qdrant + Neon
 
 | Store | Use for | Pattern (source) |
 |-------|--------|-------------------|
-| **Qdrant** | **Conversations** (e.g. conversation history or summarized turns) and **long-term memory** (user facts, preferences—“remember X”). Ava-style: extract memory-worthy facts, embed, store in Qdrant; before each turn, retrieve by similarity and inject as `memory_context`. | ava-whatsapp-agent-course (§6); MEMORY_TOP_K, memory_extraction_node, memory_injection_node. |
-| **Neon (Postgres)** | **User profiles** (thread_id, name, role, company, onboarding: key_dates, communication_preferences, current_work_context, onboarding_step). **Project management** (projects + tasks tables, §8), **RAG** (document chunks, metadata, optional pgvector for embeddings if you want RAG in Postgres), and optionally LangGraph checkpointer. | jayla-pa sql/3-user-profiles.sql, 4-onboarding-fields.sql, ONBOARDING_PLAN.md; §8; PA.md; langchain-academy/module-6. |
+| **Neon (Postgres) — LangGraph checkpointer** | **Conversations**: messages, tool calls, tool outputs. **Required for production.** Without a persistent checkpointer (e.g. `AsyncPostgresSaver`), history is lost on every deploy/restart and the assistant cannot remember past engagements. Use `langgraph-checkpoint-postgres` with `DATABASE_URL`. | PERSONAL_ASSISTANT_PATTERNS.md §2.3; docs/WHERE_DATA_IS_STORED.md. |
+| **Qdrant** | **Long-term memory** (user facts, preferences—“remember X”). Ava-style: when the user says “remember X”, extract the fact, embed, store via `put_memory`; before each turn, retrieve by similarity and inject as `memory_context`. **Both read and write are required**; if nothing writes, memory_context is always empty. | ava-whatsapp-agent-course (§6); memory.py get_memories + put_memory; MEMORY_ANALYSIS_PROMPT + memory extraction node or tool. |
+| **Neon (Postgres)** | **User profiles** (thread_id, name, role, company, onboarding: key_dates, communication_preferences, current_work_context, onboarding_step). **Project management** (projects + tasks tables, §8). **RAG** (document chunks, metadata, optional pgvector). **Checkpointer tables** (when using AsyncPostgresSaver). | jayla-pa sql/3-user-profiles.sql, 4-onboarding-fields.sql, ONBOARDING_PLAN.md; §8; langchain-academy/module-6. |
 
-**Summary**: **Qdrant** = conversations + long-term memory (Ava-style). **Neon** = user profiles + onboarding, Task Maistro / project management (CRUD) + RAG (documents, chunks). Use both; keep RAG and PM and profiles in Neon so one Postgres covers structured data and (if you use pgvector) RAG vectors; keep semantic “remember” and conversation context in Qdrant for fast similarity search.
+**Summary**: **Conversations** (messages, tool calls/outputs) → **Postgres checkpointer** (Neon) so the assistant remembers past turns across restarts. **Long-term “remember X”** → **Qdrant** (read + write); implement memory extraction and `put_memory` in the graph. **Neon** also holds user profiles, onboarding, project management, RAG, and checkpointer state. See **docs/WHERE_DATA_IS_STORED.md** for what is stored where and what is still to implement.
 
 ### 1.2 LLM choice: Groq vs DeepSeek (speed vs reasoning, rate limits)
 
@@ -91,7 +94,7 @@ Use this in a wrapper around `ToolNode` so every tool message is truncated befor
 
 - **Edges**: `START → agent`; from `agent` conditional: `authorization` | `tools` | `END`; `authorization → tools`; `tools → agent`.
 - **State**: `MessagesState` (or equivalent with `messages`).
-- **Checkpointer**: `MemorySaver()` for dev; for production use Postgres (Neon) checkpointer (e.g. `AsyncPostgresSaver`) so history persists, or keep conversation context in Qdrant (Ava-style). See §1.1.
+- **Checkpointer (required for production):** **An assistant that can’t remember past conversations is not acceptable.** Use `MemorySaver()` only for local/dev; for production **must** use a Postgres checkpointer (e.g. `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`) with Neon `DATABASE_URL` so conversation history (messages, tool calls, tool outputs) persists across restarts and deploys. Without it, every restart wipes history and the assistant appears forgetful. See §1.1 and docs/WHERE_DATA_IS_STORED.md.
 
 ```python
 # From arcade_1_basics.py / pa_agent/graph.py
@@ -161,7 +164,7 @@ For Telegram, keep auth handling on a flow that can show a link (e.g. “Open th
 3. **Graph**: Agent → authorization (if any tool requires auth) → tools → agent; `user_id` and (for jayla-pa) user profile fields in config.
 4. **Tools**: `ToolManager.init_tools(toolkits=["Gmail", "Google Calendar"])` + custom project/task tools backed by your DB (§8); optional custom tools for attachments/Telegram.
 5. **Truncation**: Custom tool node that truncates tool message content (e.g. 3500 chars, HTML stripped).
-6. **Memory**: Qdrant for conversations + long-term memory (Ava-style); Neon for user profiles + onboarding, project management (§8) and RAG (documents/chunks; optional pgvector). See §1.1.
+6. **Memory (required so the assistant remembers):** (a) **Conversation persistence** — Postgres checkpointer (e.g. `AsyncPostgresSaver`) so messages and tool outputs persist across restarts; (b) **Long-term memory** — Qdrant for “remember X” facts: retrieve via `get_memories` (inject `memory_context`) and **write** via `put_memory` when the user says to remember something (memory extraction node or tool + MEMORY_ANALYSIS_PROMPT). Neon for user profiles + onboarding, project management (§8), RAG. See §1.1, §2.3, docs/WHERE_DATA_IS_STORED.md.
 7. **Interfaces**: Start with CLI (like arcade_1_basics); add Streamlit or Telegram reusing same graph and config; for Telegram, load user profile and pass onboarding context into system prompt (jayla-pa).
 
 Using these patterns gives you a single-user personal assistant agent with robust auth, token-safe tool use, user profiles and onboarding, and a clear path from minimal (pa-agent3-style) to full PA (jayla-pa + arcade_1_basics).

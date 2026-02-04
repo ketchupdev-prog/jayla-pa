@@ -1,7 +1,9 @@
 # Telegram webhook handler. See PERSONAL_ASSISTANT_PATTERNS.md C.8, §6.6, §8.5a.
+# Production: Postgres checkpointer (DATABASE_URL) so conversation history persists across restarts.
 
 import os
 import tempfile
+from contextlib import asynccontextmanager
 
 # Load .env from project root so ARCADE_API_KEY etc. are set before graph/tools import
 _webhook_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,19 +25,45 @@ if os.path.isfile(_env_path):
 from fastapi import FastAPI, Request, Header
 from fastapi.responses import JSONResponse
 
-app = FastAPI()
-
-_graph = None
 # chat_id -> list of document row ids awaiting retention choice (keep permanent vs auto-offload after 1 week)
 _pending_retention: dict[str, list[int]] = {}
 
 
-def _get_graph():
-    global _graph
-    if _graph is None:
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Production: use Postgres checkpointer when DATABASE_URL is set so conversation history persists."""
+    db_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if db_url:
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            async with AsyncPostgresSaver.from_conn_string(db_url) as checkpointer:
+                await checkpointer.setup()
+                from graph import build_graph
+                app.state.graph = build_graph(checkpointer)
+                print("[webhook] Using Postgres checkpointer (conversation history persists).", flush=True)
+                yield
+        except Exception as e:
+            print(f"[webhook] Postgres checkpointer failed, using MemorySaver: {e}", flush=True)
+            from graph import build_graph
+            app.state.graph = build_graph()
+            yield
+    else:
         from graph import build_graph
-        _graph = build_graph()
-    return _graph
+        app.state.graph = build_graph()
+        print("[webhook] DATABASE_URL not set; using MemorySaver (conversation history in-memory only).", flush=True)
+        yield
+
+
+app = FastAPI(lifespan=_lifespan)
+
+
+def _get_graph():
+    return getattr(app.state, "graph", None) or _build_graph_fallback()
+
+
+def _build_graph_fallback():
+    from graph import build_graph
+    return build_graph()
 
 
 @app.get("/")

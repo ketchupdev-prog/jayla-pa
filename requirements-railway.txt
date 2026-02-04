@@ -1,6 +1,8 @@
 # Railway webhook deploy. Image must stay under 4GB; no torch/docling/sentence-transformers.
 # Document parse: PyPDF2 + docx2txt only. Embedding: not available on Railway (ingest returns friendly message).
+# Postgres checkpointer: conversation history persists across restarts (production).
 langgraph
+langgraph-checkpoint-postgres
 langchain-core
 langchain-groq
 langchain-deepseek

@@ -2,6 +2,8 @@
 
 Plan for **onboarding** (max 5 questions + document upload) so Jayla knows who she’s serving and can use company/legal/compliance docs in RAG.
 
+**Principle: an assistant that can’t remember is not acceptable.** Before or alongside onboarding, ensure the assistant can retain past engagements and user-stated facts. See **§8. Retention and memory (assistant must remember)** and **PERSONAL_ASSISTANT_PATTERNS.md** §1.1, §2.3; **docs/WHERE_DATA_IS_STORED.md** for where data lives and what to implement.
+
 ---
 
 ## 1. Research: What a PA/EA Needs to Know
@@ -143,5 +145,19 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 - **Flow:** Conversational (one question at a time); agent-driven with optional tool `save_onboarding_answer`.  
 - **Documents:** Upload in Telegram → parse (Docling when installed, else PyPDF2/docx2txt) → chunk → embed (when sentence-transformers available) → `documents` table; RAG retrieve in agent to power answers with legal/compliance/company content. Railway slim image: parse only; add docs via CLI/local for full RAG.  
 - **Phases:** 1 = onboarding questions + schema + prompt injection; 2 = document ingest; 3 = RAG in agent; 4 = UX polish.
+- **Retention and memory (§8):** Conversation persistence (Postgres checkpointer) and long-term memory writing (“remember X” → put_memory) are required so the assistant remembers past engagements and user-stated facts. See PERSONAL_ASSISTANT_PATTERNS.md and docs/WHERE_DATA_IS_STORED.md.
 
-**Phases 2–3 (RAG):** Implemented. Next: **Phase 1** (onboarding flow with tool/question order) or **Phase 4** (UX polish).
+**Phases 2–3 (RAG):** Implemented. Next: **Postgres checkpointer + memory writing** (so the assistant remembers), then **Phase 1** (onboarding flow) or **Phase 4** (UX polish).
+
+---
+
+## 8. Retention and memory (assistant must remember)
+
+An assistant that cannot remember past conversations or user-stated facts is not useful. **Retention and memory are prerequisites** for a useful PA, not optional.
+
+| What | Where | Required for |
+|------|--------|---------------|
+| **Conversation persistence** | **Postgres checkpointer** (Neon) | Messages, tool calls, tool outputs persist across restarts and deploys. Without it, every restart wipes history and the assistant appears forgetful. Use `AsyncPostgresSaver` from `langgraph-checkpoint-postgres` with `DATABASE_URL`. |
+| **Long-term memory writing** | **Qdrant** (read + write) | When the user says “remember X”, the graph must extract the fact and call `put_memory(store, namespace, data)` so Qdrant is populated. Currently only read (`get_memories`) is wired; without writing, `memory_context` is always empty. Implement a memory extraction node or tool (e.g. using MEMORY_ANALYSIS_PROMPT) that calls `put_memory`. |
+
+**Implementation order:** (1) Add Postgres checkpointer so conversation history persists. (2) Add memory writing (“remember X” → extract → `put_memory`) so long-term facts are stored. See **PERSONAL_ASSISTANT_PATTERNS.md** §1.1, §2.3 and **docs/WHERE_DATA_IS_STORED.md**.
