@@ -28,6 +28,7 @@ jayla-pa/
 ├── prompts.py
 ├── user_profile.py
 ├── pa_cli.py
+├── speech_to_text.py      # STT (Groq Whisper) for voice messages
 ├── ONBOARDING_PLAN.md
 ├── sql/
 │   ├── 0-drop-all.sql
@@ -35,16 +36,27 @@ jayla-pa/
 │   ├── 1-projects-tasks.sql
 │   ├── 2-rag-documents.sql
 │   ├── 3-user-profiles.sql
-│   └── 4-onboarding-fields.sql
+│   ├── 4-onboarding-fields.sql
+│   └── 5-reminders.sql    # Optional; reminders = calendar only, not run by migrations
 ├── telegram_bot/
 │   ├── client.py
 │   └── webhook.py
 ├── tools_custom/
 │   ├── gmail_attachment.py
-│   └── project_tasks.py
+│   ├── project_tasks.py
+│   └── rag_tools.py       # search_my_documents (RAG)
 └── scripts/
     ├── run_sql_migrations.py
-    └── set_telegram_webhook.py
+    ├── init_qdrant.py
+    ├── set_telegram_webhook.py
+    ├── set_railway_vars.sh
+    ├── curl_deployed.sh
+    ├── ensure_cron_secret.sh   # Optional; cron deprecated
+    ├── list_tools.py
+    ├── test_env_connections.sh
+    ├── test_stt.py             # Groq Whisper STT
+    ├── test_tool_calls.py
+    └── test_webhook_local.py
 ```
 
 ---
@@ -197,6 +209,8 @@ def authorize(state: MessagesState, config: RunnableConfig):
 
 ### C.4 agent.py (jayla-pa: user_context, onboarding_context, time_of_day, DeepSeek optional)
 
+**Note:** The live agent also injects **document_context** (RAG: top-k chunks from `rag.retrieve()` per turn) and **full datetime context** (current_date, tomorrow_date, timezone, weekday, current_time_iso, etc.) into the system prompt so Jayla never guesses "today" or "now". See `prompts.JAYLA_SYSTEM_PROMPT` placeholders `{document_context}` and the real-date block.
+
 ```python
 import re
 import os
@@ -321,9 +335,10 @@ def get_manager():
 
 def get_tools():
     from tools_custom.project_tasks import get_project_tools
+    from tools_custom.rag_tools import get_rag_tools
     manager = get_manager()
     arcade_tools = manager.to_langchain(use_interrupts=True)
-    return arcade_tools + get_project_tools()
+    return arcade_tools + get_project_tools() + get_rag_tools()
 
 def get_tools_for_model():
     return get_tools()
@@ -471,7 +486,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 *(Same as arcade-ai-agent C.11.)*
 
-### C.12 sql/2-rag-documents.sql (jayla-pa: user_id, scope, expires_at, 768d)
+### C.12 sql/2-rag-documents.sql (jayla-pa: user_id, scope, expires_at, 768d; retention = keep permanent or auto-offload after 7 days)
 
 ```sql
 CREATE TABLE IF NOT EXISTS documents (
@@ -535,8 +550,9 @@ DATABASE_URL=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 TELEGRAM_WEBHOOK_SECRET=
+BASE_URL=   # Public URL for webhook (no trailing slash)
 
-# Optional: timezone for greetings; CLI user context
+# Optional: timezone for greetings and calendar/reminder times; CLI user context
 TIMEZONE=UTC
 # USER_NAME=
 # USER_ROLE=
@@ -550,7 +566,7 @@ langgraph
 langchain-core
 langchain-groq
 langchain-deepseek
-langchain-arcade
+langchain-arcade==1.3.1
 langchain-community
 qdrant-client
 sentence-transformers
@@ -558,11 +574,14 @@ python-dotenv
 fastapi
 uvicorn
 python-telegram-bot
-psycopg2-binary
 docling
+langchain-text-splitters
+psycopg2-binary
+PyPDF2
+docx2txt
 ```
 
-*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile.)*
+*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile. RAG fallbacks: PyPDF2, docx2txt when Docling fails.)*
 
 ### C.17 langgraph.json
 

@@ -119,16 +119,14 @@ So for **Jayla we can use Groq for both STT and TTS**: one `GROQ_API_KEY` for ch
 
 ### STT (voice messages in Telegram)
 
-- **Where:** In `telegram_bot/webhook.py`, when `message.voice` is present (and optionally `message.audio`).
+- **Where:** In `telegram_bot/webhook.py`, when `message.voice` is present (and optionally `message.audio`). **Implemented:** `speech_to_text.py` wraps Groq transcription; the webhook downloads the voice file, calls `transcribe_audio(bytes)`, and uses the transcript as the user message.
 - **Steps:**
   1. Get `file_id` from `message.voice` (or `message.audio`).
   2. Call Telegram `bot.get_file(file_id)` → download bytes (e.g. to temp file or `BytesIO`).
   3. Call Groq `client.audio.transcriptions.create(file=..., model="whisper-large-v3-turbo", language="en", response_format="text")`.
-  4. Use returned string as `content` for `HumanMessage(content=content)` and pass into the graph as today (no other change).
+  4. Use returned string as `content` for `HumanMessage(content=content)` and pass into the graph (no other change).
 
 **Env:** Reuse existing `GROQ_API_KEY` (same as for chat).
-
-**Optional:** Add a small `speech_to_text.py` module (e.g. under `telegram_bot/` or `modules/speech/`) that wraps Groq transcription so the webhook stays thin.
 
 ### TTS (reply as voice in Telegram)
 

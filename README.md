@@ -44,7 +44,7 @@ With `DATABASE_URL` set in `.env` (and venv active):
 python scripts/run_sql_migrations.py
 ```
 
-**Note:** Migrations run `0-drop-all.sql` first (drops `public` schema CASCADE), then `0-extensions.sql`, `1-projects-tasks.sql`, `2-rag-documents.sql`, `3-user-profiles.sql`, `4-onboarding-fields.sql`. All data in `public` is wiped on each run. The `user_profiles` table stores name, role, company, and onboarding fields (key_dates, communication_preferences, current_work_context, onboarding_step) per thread.
+**Note:** Migrations run `0-drop-all.sql` first (drops `public` schema CASCADE), then `0-extensions.sql`, `1-projects-tasks.sql`, `2-rag-documents.sql`, `3-user-profiles.sql`, `4-onboarding-fields.sql`. `5-reminders.sql` exists but is **not** run (reminders are Google Calendar only). All data in `public` is wiped on each run. The `user_profiles` table stores name, role, company, and onboarding fields (key_dates, communication_preferences, current_work_context, onboarding_step) per thread.
 
 ### 3b. Run Qdrant init (optional, for long-term memory)
 
@@ -68,7 +68,7 @@ With `DATABASE_URL` and `EMAIL` (or `USER_ID`) set, and optionally `GROQ_API_KEY
 python scripts/test_tool_calls.py
 ```
 
-Runs: (1) project/task tools (list, create, update, get, delete for projects and tasks), (2) Arcade tools load, (3) graph invoke with "list my projects".
+Runs **[1/7]** project/task tools (Neon CRUD + cleanup), **[2/7]** Arcade tools load, **[3/7]** graph invoke ("list my projects"), **[4/7]** greeting with memory, **[5/7]** calendar auth, **[6/7]** full flow (projects + calendar + reminder + email), **[7/7]** each tool exercised (7 prompts: list_projects, list_tasks, ListCalendars, ListEvents, ListThreads, ListDraftEmails, ListLabels). Progress shows (1/7)…(7/7).
 
 ### 6. Test STT (voice → text, Groq Whisper)
 
@@ -91,6 +91,7 @@ In Telegram, sending a **voice message** is supported: the webhook downloads the
 | GET | `/` | Service info: `{"ok": true, "service": "jayla-pa", "webhook": "/webhook"}` |
 | GET | `/health` | Health check: `{"ok": true, "status": "healthy"}` |
 | POST | `/webhook` | Telegram webhook (JSON body from Telegram) |
+| GET | `/cron/send-reminders` | **Deprecated.** Returns 410 Gone. Reminders are calendar-only (Google Calendar via Arcade). |
 
 ### CLI
 
@@ -175,10 +176,13 @@ jayla-pa/
 ├── agent.py
 ├── tools.py
 ├── memory.py
-├── rag.py
+├── rag.py                  # Ingest (Docling/PyPDF2/docx2txt → chunk → embed → Neon) + retrieve
 ├── prompts.py
 ├── pa_cli.py
+├── speech_to_text.py       # STT (Groq Whisper) for voice messages
 ├── user_profile.py         # Load/save profile + onboarding per thread (Neon)
+├── docs/
+│   └── STT_TTS_GROQ.md
 ├── ONBOARDING_PLAN.md      # Onboarding flow (5 questions + doc upload)
 ├── PERSONAL_ASSISTANT_PATTERNS.md
 ├── PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md
@@ -188,12 +192,14 @@ jayla-pa/
 │   ├── 1-projects-tasks.sql
 │   ├── 2-rag-documents.sql
 │   ├── 3-user-profiles.sql # user_profiles(thread_id, name, role, company)
-│   └── 4-onboarding-fields.sql  # key_dates, communication_preferences, current_work_context, onboarding_step
+│   ├── 4-onboarding-fields.sql  # key_dates, communication_preferences, current_work_context, onboarding_step
+│   └── 5-reminders.sql     # Optional; reminders are calendar-only (Arcade), not run by migrations
 ├── telegram_bot/
 │   ├── client.py
 │   └── webhook.py
 ├── tools_custom/
 │   ├── project_tasks.py
+│   ├── rag_tools.py       # search_my_documents (RAG)
 │   └── gmail_attachment.py
 └── scripts/
     ├── run_sql_migrations.py
@@ -201,7 +207,10 @@ jayla-pa/
     ├── set_telegram_webhook.py
     ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
     ├── curl_deployed.sh   # Curl GET /, GET /health, POST /webhook (set BASE_URL)
+    ├── ensure_cron_secret.sh  # Optional; cron deprecated (reminders = calendar only)
+    ├── list_tools.py      # List agent tools (Arcade + project + RAG)
     ├── test_env_connections.sh
+    ├── test_stt.py        # Test Groq Whisper STT (voice → text)
     ├── test_tool_calls.py # Test project/task tools, Arcade load (reminders=calendar), graph invoke
     └── test_webhook_local.py # POST simulated Telegram update to local /webhook (TELEGRAM_CHAT_ID in .env; reminders=calendar)
 ```
@@ -216,6 +225,7 @@ jayla-pa/
 |--------|--------|
 | **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
 | **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `delete_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`, `delete_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
+| **RAG** (`tools_custom/rag_tools.py`) | `search_my_documents(query)` — explicit search over uploaded documents. RAG retrieval also runs each turn and injects "Document context" into the system prompt. |
 | **Reminders** | Calendar only. "Remind me to X at Y" → Google Calendar event (GoogleCalendar_CreateEvent). No separate reminder DB. |
 
 **Imports and packages (webhook / Railway)**
@@ -223,8 +233,9 @@ jayla-pa/
 - `graph.py` → `agent`, `nodes`, `langgraph` (MemorySaver, StateGraph, etc.), `langgraph.prebuilt` (ToolNode)
 - `agent.py` → `tools.get_tools_for_model`, `memory`, `prompts`, `langchain_core`, `langchain_groq`, optional `langchain_deepseek`
 - `nodes.py` → `tools.get_manager`, `langchain_core`, `langgraph.graph`
-- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`
+- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`, `tools_custom.rag_tools.get_rag_tools`
 - `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
+- `tools_custom/rag_tools.py` → `rag.retrieve`, `langchain_core.tools.tool`
 
 **requirements-railway.txt** must include: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `psycopg2-binary`. See also `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
 
@@ -311,4 +322,5 @@ python pa_cli.py
 - **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
 - **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
 - **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
-- **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (Docling → chunk → sentence-transformers all-mpnet-base-v2 → Neon `documents`). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Optional tool `search_my_documents` lets the user explicitly search uploaded docs.
+- **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (Docling/PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). After ingest, Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
+- **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.

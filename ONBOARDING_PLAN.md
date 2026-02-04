@@ -106,9 +106,10 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 3. **Parse:** Use **Docling** (or fallback) to extract text from PDF/DOCX.  
 4. **Chunk:** Split with RecursiveCharacterTextSplitter (or similar); chunk size ~500–1000, overlap ~100.  
 5. **Embed:** sentence-transformers `all-mpnet-base-v2` (768d) — already in `documents` schema.  
-6. **Store:** Insert into `documents` (user_id, content, metadata, embedding, scope).  
+6. **Store:** Insert into `documents` (user_id, content, metadata, embedding, scope, expires_at).  
    - `user_id` = same as profile (e.g. email or thread_id).  
    - `metadata` = { "source": "telegram", "filename": "...", "doc_type": "contract" | "compliance" | "company" | "other" }.  
+   - **Retention:** After ingest, Jayla asks: keep **permanently** or **auto-remove after 7 days**. User replies **keep** (or **permanent**) or **week**; webhook calls `rag.update_documents_retention(inserted_ids, expires_at)` (NULL = permanent, or now+7d for auto-offload). Retrieve excludes rows where `expires_at` is past.  
 7. **Retrieve:** On each user message (or when agent needs context), run `retrieve(query, user_id, limit=5)` and inject the top chunks into the system prompt or a “Document context” block.
 
 **RAG in agent:**  
@@ -116,10 +117,10 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 - Append “Document context (use to ground answers):” + retrieved chunks to the system prompt.  
 - So Jayla’s answers can cite contracts, compliance, company docs when relevant.
 
-**Scope:**  
-- `rag.ingest_document()` and `rag.retrieve()` are stubs today.  
-- Implement: Docling (or PyPDF2 for PDF-only) → split → embed (sentence-transformers) → Neon `documents`.  
-- Railway deploy: Docling/sentence-transformers are heavy; options: (a) run ingest only locally or in a separate worker, or (b) use a lighter parser (e.g. PyPDF2 + docx2txt) and a smaller embedder for Railway.
+**Scope (implemented):**  
+- **Phase 2 & 3 done.** `rag.ingest_document()` returns `(status, inserted_ids)`; Docling (with PyPDF2/docx2txt fallback) → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`. Webhook handles `message.document` → download → ingest → asks "Keep permanently or auto-remove after 7 days?" (reply **keep** or **week**) → `rag.update_documents_retention(ids, expires_at)` sets retention.  
+- `rag.retrieve()` runs each turn; top-k chunks (excluding expired) are injected as "Document context" in the system prompt. Optional tool `search_my_documents(query)` for explicit search.  
+- Railway deploy: Docling/sentence-transformers are heavy; use `requirements-railway.txt` (slim, no RAG) or run ingest locally/in a worker.
 
 ---
 
@@ -128,8 +129,8 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 | Phase | What | Deliverables |
 |-------|------|--------------|
 | **Phase 1** | Onboarding schema + 5 questions | Migration `4-onboarding-fields.sql`; extend `user_profiles`; `user_profile.load/save` for new fields; prompts + agent logic (or tool `save_onboarding_answer`) so Jayla asks Q1–Q5 in order and marks complete. |
-| **Phase 2** | Document upload + ingest | Webhook: handle `message.document`; download file; call `rag.ingest_document(bytes_content, user_id, metadata)`; implement `rag.ingest_document()` (parse → chunk → embed → insert into `documents`). Prefer local or worker for heavy ingest. |
-| **Phase 3** | RAG retrieval in agent | Implement `rag.retrieve()`; in `call_agent()`, retrieve top-k chunks and add “Document context” to system prompt; optionally add a tool “search_my_documents” for explicit search. |
+| **Phase 2** ✅ | Document upload + ingest | **Done.** Webhook: handle `message.document`; download file; call `rag.ingest_document(bytes_content, user_id, metadata)`. Implemented: Docling/PyPDF2/docx2txt → chunk → all-mpnet-base-v2 → Neon `documents`. |
+| **Phase 3** ✅ | RAG retrieval in agent | **Done.** `rag.retrieve()` in `call_agent()`; top-k chunks as Document context in system prompt; tool `search_my_documents(query)` in `tools_custom/rag_tools.py`. |
 | **Phase 4** (optional) | Onboarding UX polish | “Skip” / “Later” for each question; optional reminder to upload docs after onboarding; list of doc types (legal, compliance, company) in Q5. |
 
 ---
@@ -143,4 +144,4 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 - **Documents:** Upload in Telegram → parse (Docling) → chunk → embed → `documents` table; RAG retrieve in agent to power answers with legal/compliance/company content.  
 - **Phases:** 1 = onboarding questions + schema + prompt injection; 2 = document ingest; 3 = RAG in agent; 4 = UX polish.
 
-Next step: implement **Phase 1** (migration, load/save, **inject onboarding block into system prompt in agent**, prompts + agent or tool, so Jayla runs the 5-question onboarding flow).
+**Phases 2–3 (RAG):** Implemented. Next: **Phase 1** (onboarding flow with tool/question order) or **Phase 4** (UX polish).

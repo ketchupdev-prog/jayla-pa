@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 
 _graph = None
+# chat_id -> list of document row ids awaiting retention choice (keep permanent vs auto-offload after 1 week)
+_pending_retention: dict[str, list[int]] = {}
 
 
 def _get_graph():
@@ -95,12 +97,19 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             filename = doc.get("file_name") or "document"
             user_id = os.environ.get("EMAIL", "") or chat_id
             from rag import ingest_document
-            status = ingest_document(
+            status, inserted_ids = ingest_document(
                 bytes_content=doc_bytes,
                 user_id=user_id,
                 metadata={"source": "telegram", "filename": filename, "doc_type": "other"},
             )
-            await send_message(f"✓ {status}", chat_id=chat_id)
+            if inserted_ids:
+                _pending_retention[chat_id] = inserted_ids
+                await send_message(
+                    f"✓ {status}\n\nKeep this document permanently or auto-remove after a week? Reply **keep** for permanent, **week** for auto-remove after 7 days.",
+                    chat_id=chat_id,
+                )
+            else:
+                await send_message(f"✓ {status}" if status.startswith("Added") else status, chat_id=chat_id)
             print(f"[webhook] RAG ingest for chat_id={chat_id} file={filename}: {status}", flush=True)
         except Exception as e:
             import traceback
@@ -119,7 +128,6 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         if file_id:
             try:
                 from telegram_bot.client import get_bot
-                import tempfile
                 bot = get_bot()
                 tg_file = await bot.get_file(file_id)
                 with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
@@ -151,6 +159,25 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     if allowed_chat and chat_id != allowed_chat:
         print(f"[webhook] Skipping: chat_id {chat_id} != TELEGRAM_CHAT_ID {allowed_chat}", flush=True)
         return {"ok": True}
+    # Handle retention choice after document upload (keep permanent vs auto-offload after 1 week)
+    if chat_id in _pending_retention:
+        raw_lower = text.strip().lower()
+        if raw_lower in ("keep", "permanent", "p", "permanently"):
+            from rag import update_documents_retention
+            from telegram_bot.client import send_message
+            update_documents_retention(_pending_retention[chat_id], None)
+            del _pending_retention[chat_id]
+            await send_message("Done. Document kept permanently.", chat_id=chat_id)
+            return {"ok": True}
+        if raw_lower in ("week", "w", "1 week", "7 days", "auto", "offload"):
+            from datetime import datetime, timedelta, timezone
+            from rag import update_documents_retention
+            from telegram_bot.client import send_message
+            expires = datetime.now(timezone.utc) + timedelta(days=7)
+            update_documents_retention(_pending_retention[chat_id], expires)
+            del _pending_retention[chat_id]
+            await send_message("Done. Document will auto-remove after 7 days.", chat_id=chat_id)
+            return {"ok": True}
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
     try:
         from langchain_core.messages import HumanMessage
