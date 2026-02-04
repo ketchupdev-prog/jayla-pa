@@ -16,7 +16,7 @@ def get_manager():
     global _manager
     if _manager is None:
         _manager = ToolManager(api_key=os.environ["ARCADE_API_KEY"])
-        _manager.init_tools(toolkits=["Gmail", "Google Calendar"])
+        _manager.init_tools(toolkits=["Gmail", "GoogleCalendar"])
     return _manager
 
 

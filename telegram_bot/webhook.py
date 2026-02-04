@@ -59,8 +59,40 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
     # If message.document: download → RAG ingest (§8.5a) → send "Added …" and return
-    # If message.voice: STT → use transcript as text. If message.photo: VLM → "[Image: …]"
+    # If message.voice / message.audio: download → STT → use transcript as text
     text = (message.get("text") or "").strip()
+    if not text and (message.get("voice") or message.get("audio")):
+        voice = message.get("voice") or message.get("audio") or {}
+        file_id = voice.get("file_id")
+        if file_id:
+            try:
+                from telegram_bot.client import get_bot
+                import tempfile
+                bot = get_bot()
+                tg_file = await bot.get_file(file_id)
+                with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+                    tmp.close()
+                    await tg_file.download_to_drive(tmp.name)
+                    with open(tmp.name, "rb") as f:
+                        audio_bytes = f.read()
+                    try:
+                        os.unlink(tmp.name)
+                    except OSError:
+                        pass
+                from speech_to_text import transcribe_async
+                text = (await transcribe_async(audio_bytes)).strip()
+                if text:
+                    print(f"[webhook] STT transcript for chat_id={chat_id}: {text[:60]!r}...", flush=True)
+            except Exception as stt_err:
+                import traceback
+                traceback.print_exc()
+                print(f"[webhook] STT failed for chat_id={chat_id}: {stt_err}", flush=True)
+                try:
+                    from telegram_bot.client import send_message
+                    await send_message("I couldn't transcribe that voice message. Please try again or send text.", chat_id=chat_id)
+                except Exception:
+                    pass
+                return {"ok": True}
     if not text:
         return {"ok": True}
     allowed_chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()

@@ -137,12 +137,14 @@ def main():
         except Exception as e:
             print(f"  FAIL: {e}")
         print()
-    # 2. Arcade tools load
+    # 2. Arcade tools load (include full list and calendar check)
     print("[2/3] Arcade tools (Gmail, Calendar) load...")
     try:
         status, data = test_arcade_tools_load()
         if status == "OK":
-            print(f"  OK ({len(data)} tools): {', '.join(data[:8])}{'...' if len(data) > 8 else ''}")
+            calendar_tools = [n for n in data if "Calendar" in n or "calendar" in n]
+            print(f"  OK ({len(data)} tools). Calendar-related: {calendar_tools or 'NONE'}")
+            print(f"  All tool names: {sorted(data)}")
         else:
             print(f"  FAIL: {data}")
     except Exception as e:

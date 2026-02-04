@@ -70,6 +70,16 @@ python scripts/test_tool_calls.py
 
 Runs: (1) project/task tools (list_projects, create_project, list_tasks, create_task_in_project, get_task, update_task), (2) Arcade tools load, (3) graph invoke with "list my projects".
 
+### 6. Test STT (voice → text, Groq Whisper)
+
+With `GROQ_API_KEY` set and an audio file (wav, ogg, mp3, m4a, etc.):
+
+```bash
+python scripts/test_stt.py path/to/audio.wav
+```
+
+In Telegram, sending a **voice message** is supported: the webhook downloads the file, transcribes it with Groq Whisper (`whisper-large-v3-turbo`), and uses the transcript as the user message. See `speech_to_text.py` and `docs/STT_TTS_GROQ.md`.
+
 ---
 
 ## Running
