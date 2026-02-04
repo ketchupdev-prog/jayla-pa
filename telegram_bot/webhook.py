@@ -138,6 +138,7 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         from langchain_core.messages import HumanMessage
         from telegram_bot.client import send_message, send_typing
         from user_profile import load_user_profile, save_user_profile, extract_profile_from_message
+        from memory import get_memory_store
         profile = load_user_profile(chat_id)
         config = {
             "configurable": {
@@ -150,6 +151,7 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
                 "communication_preferences": profile.get("communication_preferences", ""),
                 "current_work_context": profile.get("current_work_context", ""),
                 "onboarding_step": profile.get("onboarding_step", 0),
+                "store": get_memory_store(),
             }
         }
         graph = _get_graph()

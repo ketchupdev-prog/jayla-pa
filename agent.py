@@ -92,6 +92,8 @@ def _get_model():
 
 def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
     messages = state["messages"]
+    # Store comes from config if not passed (webhook/pa_cli set config["configurable"]["store"])
+    store = store or (config.get("configurable") or {}).get("store")
     memory_context = ""
     if store:
         namespace, _ = get_memory_namespace(config)

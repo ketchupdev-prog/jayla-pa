@@ -186,6 +186,61 @@ def get_task(task_id: str) -> str:
     return f"Task: {row['title']} (status: {row['status']}{due}, project: {row['project_name']}). Notes: {row['notes'] or 'none'}"
 
 
+@tool
+def delete_task(task_id: str) -> str:
+    """Delete a task by id (UUID). Use when the user says 'delete task X', 'remove task X', 'cancel task X', or 'complete and remove task X'. task_id from list_tasks or get_task."""
+    user_id = _get_user_id()
+    task_id = (task_id or "").strip()
+    if not task_id:
+        return "task_id is required (UUID from list_tasks or get_task)."
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tasks WHERE id = %s AND user_id = %s RETURNING id, title",
+                    (task_id, user_id),
+                )
+                row = cur.fetchone()
+                conn.commit()
+    except Exception as e:
+        return f"Error deleting task: {e}"
+    if row:
+        return f"Deleted task '{row['title']}' (id: {row['id']})."
+    return f"Task not found with id {task_id}."
+
+
+@tool
+def delete_project(project_id: str) -> str:
+    """Delete a project by id (UUID). This also deletes all tasks in that project. Use when the user says 'delete project X', 'remove project X', or 'archive project X'. project_id from list_projects."""
+    user_id = _get_user_id()
+    project_id = (project_id or "").strip()
+    if not project_id:
+        return "project_id is required (UUID from list_projects)."
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM projects WHERE id = %s AND user_id = %s RETURNING id, name",
+                    (project_id, user_id),
+                )
+                row = cur.fetchone()
+                conn.commit()
+    except Exception as e:
+        return f"Error deleting project: {e}"
+    if row:
+        return f"Deleted project '{row['name']}' (id: {row['id']}). All tasks in it were removed."
+    return f"Project not found with id {project_id}."
+
+
 def get_project_tools():
     """Return list of LangChain tools for project/task CRUD."""
-    return [list_projects, create_project, list_tasks, create_task_in_project, update_task, get_task]
+    return [
+        list_projects,
+        create_project,
+        delete_project,
+        list_tasks,
+        create_task_in_project,
+        update_task,
+        get_task,
+        delete_task,
+    ]

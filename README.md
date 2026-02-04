@@ -68,7 +68,7 @@ With `DATABASE_URL` and `EMAIL` (or `USER_ID`) set, and optionally `GROQ_API_KEY
 python scripts/test_tool_calls.py
 ```
 
-Runs: (1) project/task tools (list_projects, create_project, list_tasks, create_task_in_project, get_task, update_task), (2) Arcade tools load, (3) graph invoke with "list my projects".
+Runs: (1) project/task tools (list, create, update, get, delete for projects and tasks), (2) Arcade tools load, (3) graph invoke with "list my projects".
 
 ### 6. Test STT (voice → text, Groq Whisper)
 
@@ -215,7 +215,7 @@ jayla-pa/
 | Source | Tools |
 |--------|--------|
 | **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
-| **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
+| **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `delete_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`, `delete_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
 | **Reminders** | Calendar only. "Remind me to X at Y" → Google Calendar event (GoogleCalendar_CreateEvent). No separate reminder DB. |
 
 **Imports and packages (webhook / Railway)**
@@ -310,5 +310,5 @@ python pa_cli.py
 - **User profiles & onboarding:** Profile (name, role, company) and onboarding (key_dates, communication_preferences, current_work_context) are loaded per thread and **injected into the system prompt** so Jayla replies in the user’s preferred style and uses projects/deadlines/tasks/reminders. See ONBOARDING_PLAN.md.
 - **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
 - **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
-- **Memory:** The graph does not pass a store into the agent by default; add a LangGraph Store or Qdrant for `memory_context`.
+- **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
 - **RAG:** `rag.py` is a stub; implement Docling + all-mpnet-base-v2 + Neon for document ingest and retrieval (see ONBOARDING_PLAN.md Phase 2–3).

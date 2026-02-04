@@ -28,14 +28,16 @@ os.environ.setdefault("USER_ID", os.environ.get("EMAIL", "test-user@jayla.local"
 
 
 def test_project_tools():
-    """Test Neon-backed project/task tools (list_projects, create_project, list_tasks, create_task_in_project, update_task, get_task)."""
+    """Test Neon-backed project/task tools (list, create, update, get, delete for projects and tasks)."""
     from tools_custom.project_tasks import (
         list_projects,
         create_project,
+        delete_project,
         list_tasks,
         create_task_in_project,
         update_task,
         get_task,
+        delete_task,
     )
     results = []
     # 1. list_projects (empty or existing)
@@ -81,6 +83,12 @@ def test_project_tools():
     # 7. list_tasks again (should show the task)
     out = list_tasks.invoke({})
     results.append(("list_tasks (after create)", "OK", (out or "none")[:80]))
+    # 8. delete_task
+    out = delete_task.invoke({"task_id": task_id})
+    results.append(("delete_task", "OK" if "Deleted" in out else "FAIL", out[:80]))
+    # 9. delete_project (cleans up test project)
+    out = delete_project.invoke({"project_id": project_id})
+    results.append(("delete_project", "OK" if "Deleted" in out else "FAIL", out[:80]))
     return results
 
 

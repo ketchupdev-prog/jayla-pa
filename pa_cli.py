@@ -13,6 +13,7 @@ except ImportError:
 
 from langchain_core.messages import HumanMessage
 from graph import build_graph
+from memory import get_memory_store
 
 
 async def main():
@@ -25,6 +26,7 @@ async def main():
             "user_name": os.environ.get("USER_NAME", ""),
             "user_role": os.environ.get("USER_ROLE", ""),
             "user_company": os.environ.get("USER_COMPANY", ""),
+            "store": get_memory_store(),
         }
     }
     graph = build_graph()
