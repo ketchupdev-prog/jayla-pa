@@ -170,6 +170,10 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
         if doc_chunks
         else "Document context: (None)"
     )
+    # When user sent a photo, last_user_text contains [Image: ...]. Force the model to answer from it.
+    image_instruction = ""
+    if last_user_text and "[Image:" in last_user_text:
+        image_instruction = "\n\n[CRITICAL] The user's last message includes a photo they sent. The text in [Image: ...] is the description of that photo. You MUST describe what is in the image or answer their question about it. Do not say you cannot see or process images—you can, via that description."
     system_content = JAYLA_SYSTEM_PROMPT.format(
         **dt_ctx,
         user_context=user_context,
@@ -178,7 +182,7 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
         onboarding_context=onboarding_context,
         document_context=document_context,
         current_activity="",
-    )
+    ) + image_instruction
     trimmed = [
         m
         if not (

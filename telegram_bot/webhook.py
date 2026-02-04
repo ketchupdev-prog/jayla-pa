@@ -244,6 +244,43 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             del _pending_retention[chat_id]
             await send_message("Done. Document will auto-remove after 7 days.", chat_id=chat_id)
             return {"ok": True}
+    # Image-generation shortcut: if user clearly asks for an image, generate it here and reply with link (no LLM needed)
+    _img_lower = text.strip().lower()
+    _is_image_request = (
+        "generate" in _img_lower and ("image" in _img_lower or "picture" in _img_lower or "draw" in _img_lower or "photo" in _img_lower)
+    ) or "draw a" in _img_lower or "draw an" in _img_lower or "create an image" in _img_lower or "create a image" in _img_lower
+    if _is_image_request:
+        import re
+        _prompt = text.strip()
+        for _prefix in (
+            r"generate\s+(?:an?\s+)?image\s+(?:of\s+)?",
+            r"generate\s+(?:an?\s+)?picture\s+(?:of\s+)?",
+            r"draw\s+(?:an?\s+)?",
+            r"create\s+(?:an?\s+)?image\s+(?:of\s+)?",
+            r"generate\s+image\s+of\s+",
+            r"generate\s+a\s+",
+            r"make\s+(?:an?\s+)?image\s+(?:of\s+)?",
+        ):
+            _prompt = re.sub(_prefix, "", _prompt, flags=re.I).strip()
+        _prompt = re.sub(r"\s+image\s*$", "", _prompt, flags=re.I).strip()
+        if not _prompt or len(_prompt) < 2:
+            _prompt = "a ramen bowl" if "ramen" in text.lower() else "a beautiful image"
+        try:
+            from tools_custom.image_gen_tools import generate_image
+            from telegram_bot.client import send_message
+            _out = generate_image.invoke({"prompt": _prompt})
+            _url = _out
+            if "http" in _out:
+                _url = next((x for x in _out.split() if x.startswith("http")), _out)
+            await send_message(f"Here's your image. Open to view: {_url}", chat_id=chat_id)
+            print(f"[webhook] Image gen shortcut for chat_id={chat_id} prompt={_prompt[:40]!r}", flush=True)
+            return {"ok": True}
+        except Exception as _e:
+            import traceback
+            traceback.print_exc()
+            print(f"[webhook] Image gen shortcut failed for chat_id={chat_id}: {_e}", flush=True)
+            # Fall through to normal graph so agent can try or reply
+
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
     try:
         from langchain_core.messages import HumanMessage
