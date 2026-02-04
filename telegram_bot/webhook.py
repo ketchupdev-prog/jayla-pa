@@ -1,6 +1,7 @@
 # Telegram webhook handler. See PERSONAL_ASSISTANT_PATTERNS.md C.8, §6.6, §8.5a.
 
 import os
+import tempfile
 
 # Load .env from project root so ARCADE_API_KEY etc. are set before graph/tools import
 _webhook_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,32 +51,15 @@ async def cron_send_reminders(
     secret: str | None = None,
     x_cron_secret: str | None = Header(None, alias="X-Cron-Secret"),
 ):
-    """Proactive reminder delivery. Call periodically (e.g. every 1–5 min) from a cron job.
-    Requires CRON_SECRET in query ?secret=... or header X-Cron-Secret."""
-    cron_secret = (os.environ.get("CRON_SECRET") or "").strip()
-    if not cron_secret:
-        return JSONResponse({"ok": False, "error": "CRON_SECRET not configured"}, status_code=503)
-    provided = (secret or "") or (x_cron_secret or "")
-    if provided != cron_secret:
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    user_id = (os.environ.get("EMAIL") or "").strip()
-    chat_id = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
-    if not user_id or not chat_id:
-        return JSONResponse({"ok": False, "error": "EMAIL and TELEGRAM_CHAT_ID required"}, status_code=400)
-    try:
-        from tools_custom.reminders import get_due_reminders, mark_reminders_sent
-        from telegram_bot.client import send_message
-        due = get_due_reminders(user_id)
-        sent_ids = []
-        for _id, msg in due:
-            await send_message(f"⏰ Reminder: {msg}", chat_id=chat_id)
-            sent_ids.append(_id)
-        if sent_ids:
-            mark_reminders_sent(sent_ids)
-        return {"ok": True, "sent": len(sent_ids)}
-    except Exception as e:
-        print(f"[cron] send-reminders error: {e}", flush=True)
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    """Reminders are calendar-only (Google Calendar via Arcade). This endpoint is deprecated.
+    Return 410 Gone so cron jobs can be updated. Use GoogleCalendar_ListEvents for due events."""
+    return JSONResponse(
+        {
+            "ok": False,
+            "error": "Reminders are calendar-only. Use Google Calendar (Arcade); this cron endpoint is deprecated.",
+        },
+        status_code=410,
+    )
 
 
 @app.post("/webhook")
@@ -93,6 +77,40 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     chat = message.get("chat") or {}
     chat_id = str(chat.get("id") or "")
     # If message.document: download → RAG ingest (§8.5a) → send "Added …" and return
+    doc = message.get("document") or {}
+    if doc.get("file_id"):
+        try:
+            from telegram_bot.client import get_bot, send_message
+            bot = get_bot()
+            tg_file = await bot.get_file(doc["file_id"])
+            with tempfile.NamedTemporaryFile(suffix="", delete=False) as tmp:
+                tmp.close()
+                await tg_file.download_to_drive(tmp.name)
+                with open(tmp.name, "rb") as f:
+                    doc_bytes = f.read()
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+            filename = doc.get("file_name") or "document"
+            user_id = os.environ.get("EMAIL", "") or chat_id
+            from rag import ingest_document
+            status = ingest_document(
+                bytes_content=doc_bytes,
+                user_id=user_id,
+                metadata={"source": "telegram", "filename": filename, "doc_type": "other"},
+            )
+            await send_message(f"✓ {status}", chat_id=chat_id)
+            print(f"[webhook] RAG ingest for chat_id={chat_id} file={filename}: {status}", flush=True)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            try:
+                from telegram_bot.client import send_message
+                await send_message(f"I couldn't add that document: {str(e)[:200]}", chat_id=chat_id)
+            except Exception:
+                pass
+        return {"ok": True}
     # If message.voice / message.audio: download → STT → use transcript as text
     text = (message.get("text") or "").strip()
     if not text and (message.get("voice") or message.get("audio")):

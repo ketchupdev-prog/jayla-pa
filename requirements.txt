@@ -13,4 +13,8 @@ fastapi
 uvicorn
 python-telegram-bot
 docling
+langchain-text-splitters
 psycopg2-binary
+# Optional RAG fallback when Docling fails (PDF/DOCX):
+PyPDF2
+docx2txt

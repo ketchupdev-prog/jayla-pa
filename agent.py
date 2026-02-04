@@ -2,7 +2,7 @@
 
 import re
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage, ToolMessage
@@ -18,16 +18,21 @@ from langchain_groq import ChatGroq
 from tools import get_tools_for_model
 from memory import get_memory_namespace, get_memories
 from prompts import JAYLA_SYSTEM_PROMPT, JAYLA_USER_CONTEXT_KNOWN, JAYLA_USER_CONTEXT_UNKNOWN
+from rag import retrieve as rag_retrieve
 
 MAX_CONTENT_CHARS = int(os.environ.get("PA_MAX_CONTENT_CHARS", "3500"))
 
-# Timezone for greeting (e.g. "Africa/Windhoek" for Namibia). Default UTC.
-def _get_time_of_day() -> str:
+# Timezone for greeting and current date (e.g. "Africa/Windhoek"). Default UTC.
+def _get_tz():
     tz_name = os.environ.get("TIMEZONE", "UTC")
     try:
-        tz = ZoneInfo(tz_name)
+        return ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("UTC")
+        return ZoneInfo("UTC")
+
+
+def _get_time_of_day() -> str:
+    tz = _get_tz()
     hour = datetime.now(tz).hour
     if 5 <= hour < 12:
         return "morning"
@@ -36,6 +41,16 @@ def _get_time_of_day() -> str:
     if 17 <= hour < 21:
         return "evening"
     return "evening"  # night -> "Good evening"
+
+
+def _get_current_date_and_tz() -> tuple[str, str, str]:
+    """Return (today YYYY-MM-DD, timezone name, tomorrow YYYY-MM-DD) for system prompt so calendar/reminders use correct date (Telegram + CLI)."""
+    tz = _get_tz()
+    now = datetime.now(tz)
+    today = now.strftime("%Y-%m-%d")
+    tomorrow_dt = now + timedelta(days=1)
+    tomorrow = tomorrow_dt.strftime("%Y-%m-%d")
+    return today, os.environ.get("TIMEZONE", "UTC"), tomorrow
 
 
 def _truncate(content: str) -> str:
@@ -130,11 +145,29 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
     if current_work_context:
         parts.append(f"Current work: projects, deadlines, tasks, reminders: {current_work_context}. Use this to prioritise and suggest follow-up.")
     onboarding_context = "\n".join(parts) if parts else ""
+    current_date, timezone_name, tomorrow_date = _get_current_date_and_tz()
+    # RAG: retrieve top-k chunks for last user message and inject as document context (ONBOARDING_PLAN.md §5, Phase 3)
+    last_user_text = ""
+    for m in reversed(messages):
+        if getattr(m, "type", None) == "human" and getattr(m, "content", None):
+            last_user_text = (m.content if isinstance(m.content, str) else str(m.content)).strip()
+            break
+    user_id_rag = conf.get("user_id") or os.environ.get("EMAIL", "") or (conf.get("thread_id") if isinstance(conf.get("thread_id"), str) else "")
+    doc_chunks = rag_retrieve(last_user_text, user_id=user_id_rag or None, limit=5) if last_user_text else []
+    document_context = (
+        "Document context (use to ground answers):\n" + "\n\n---\n\n".join(doc_chunks)
+        if doc_chunks
+        else "Document context: (None)"
+    )
     system_content = JAYLA_SYSTEM_PROMPT.format(
+        current_date=current_date,
+        tomorrow_date=tomorrow_date,
+        timezone=timezone_name,
         user_context=user_context,
         time_of_day=_get_time_of_day(),
         memory_context=memory_context or "(None)",
         onboarding_context=onboarding_context,
+        document_context=document_context,
         current_activity="",
     )
     trimmed = [

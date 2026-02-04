@@ -18,6 +18,8 @@ dependencies = [
     "python-telegram-bot",
     "docling",
     "psycopg2-binary",
+    "pypdf>=6.6.2",
+    "pymupdf>=1.26.7",
 ]
 
 [tool.setuptools.packages.find]
