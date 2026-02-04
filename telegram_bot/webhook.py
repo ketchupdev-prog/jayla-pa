@@ -211,14 +211,39 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
                         image_bytes,
                         "Describe what you see in this image in one or two short sentences for a personal assistant.",
                     )
+                    # If vision returned a failure message (no key, API error, etc.), reply directly and skip agent
+                    if description.strip().startswith("(") and (
+                        "not configured" in description or "not available" in description
+                        or "Could not" in description or "No description" in description or "No image" in description
+                    ):
+                        try:
+                            from telegram_bot.client import send_message
+                            await send_message(
+                                "I received your photo but couldn't analyze it right now. "
+                                "You can describe what's in it or ask me something—I'm here to help.",
+                                chat_id=chat_id,
+                            )
+                        except Exception:
+                            pass
+                        print(f"[webhook] Vision returned fallback for chat_id={chat_id}: {description[:50]!r}", flush=True)
+                        return {"ok": True}
                     text = f"{caption}\n[Image: {description}]".strip() if caption else f"[Image: {description}]"
                     print(f"[webhook] Vision for chat_id={chat_id}: {description[:60]!r}...", flush=True)
                 except Exception as v_err:
                     import traceback
                     traceback.print_exc()
                     print(f"[webhook] Vision failed for chat_id={chat_id}: {v_err}", flush=True)
-                    # Still respond: inject placeholder so the agent can reply (e.g. "I got your image but couldn't analyze it")
-                    text = f"{caption}\n[Image: (user sent an image; description unavailable—you can describe it if you'd like)]".strip() if caption else "[Image: (user sent an image; description unavailable—you can describe it if you'd like)]"
+                    # Reply directly so user gets a friendly message (no "error analyzing" from agent)
+                    try:
+                        from telegram_bot.client import send_message
+                        await send_message(
+                            "I received your photo but couldn't analyze it right now. "
+                            "You can describe what's in it or ask me something—I'm here to help.",
+                            chat_id=chat_id,
+                        )
+                    except Exception:
+                        pass
+                    return {"ok": True}
     if not text:
         return {"ok": True}
     allowed_chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
