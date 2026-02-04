@@ -43,14 +43,25 @@ def _get_time_of_day() -> str:
     return "evening"  # night -> "Good evening"
 
 
-def _get_current_date_and_tz() -> tuple[str, str, str]:
-    """Return (today YYYY-MM-DD, timezone name, tomorrow YYYY-MM-DD) for system prompt so calendar/reminders use correct date (Telegram + CLI)."""
+def _get_datetime_context() -> dict:
+    """Return full date/time for system prompt so the agent never guesses — weekday, month, year, today, tomorrow, current time (Telegram + CLI)."""
     tz = _get_tz()
     now = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
     tomorrow_dt = now + timedelta(days=1)
     tomorrow = tomorrow_dt.strftime("%Y-%m-%d")
-    return today, os.environ.get("TIMEZONE", "UTC"), tomorrow
+    timezone_name = os.environ.get("TIMEZONE", "UTC")
+    return {
+        "current_date": today,
+        "tomorrow_date": tomorrow,
+        "timezone": timezone_name,
+        "weekday": now.strftime("%A"),           # e.g. Monday
+        "month_name": now.strftime("%B"),         # e.g. February
+        "year": now.strftime("%Y"),               # e.g. 2025
+        "day_of_month": str(now.day),  # e.g. 3
+        "current_time_iso": now.strftime("%H:%M"),  # e.g. 14:30
+        "current_datetime_iso": now.strftime("%Y-%m-%dT%H:%M:%S"),  # full ISO for "now"
+    }
 
 
 def _truncate(content: str) -> str:
@@ -145,7 +156,7 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
     if current_work_context:
         parts.append(f"Current work: projects, deadlines, tasks, reminders: {current_work_context}. Use this to prioritise and suggest follow-up.")
     onboarding_context = "\n".join(parts) if parts else ""
-    current_date, timezone_name, tomorrow_date = _get_current_date_and_tz()
+    dt_ctx = _get_datetime_context()
     # RAG: retrieve top-k chunks for last user message and inject as document context (ONBOARDING_PLAN.md §5, Phase 3)
     last_user_text = ""
     for m in reversed(messages):
@@ -160,9 +171,7 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
         else "Document context: (None)"
     )
     system_content = JAYLA_SYSTEM_PROMPT.format(
-        current_date=current_date,
-        tomorrow_date=tomorrow_date,
-        timezone=timezone_name,
+        **dt_ctx,
         user_context=user_context,
         time_of_day=_get_time_of_day(),
         memory_context=memory_context or "(None)",
