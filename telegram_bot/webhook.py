@@ -134,22 +134,6 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         print(f"[webhook] Skipping: chat_id {chat_id} != TELEGRAM_CHAT_ID {allowed_chat}", flush=True)
         return {"ok": True}
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
-    # Send any due reminders for this user before processing the message (fetch → send → mark sent)
-    try:
-        from tools_custom.reminders import get_due_reminders, mark_reminders_sent
-        from telegram_bot.client import send_message
-        user_id = os.environ.get("EMAIL", "")
-        if user_id:
-            due = get_due_reminders(user_id)
-            sent_ids = []
-            for _id, msg in due:
-                await send_message(f"⏰ Reminder: {msg}", chat_id=chat_id)
-                sent_ids.append(_id)
-            if sent_ids:
-                mark_reminders_sent(sent_ids)
-                print(f"[webhook] Sent {len(sent_ids)} reminder(s) to chat_id={chat_id}", flush=True)
-    except Exception as rem_err:
-        print(f"[webhook] Reminders delivery skip: {rem_err}", flush=True)
     try:
         from langchain_core.messages import HumanMessage
         from telegram_bot.client import send_message, send_typing

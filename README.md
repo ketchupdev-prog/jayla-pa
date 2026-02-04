@@ -202,7 +202,8 @@ jayla-pa/
     ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
     ├── curl_deployed.sh   # Curl GET /, GET /health, POST /webhook (set BASE_URL)
     ├── test_env_connections.sh
-    └── test_tool_calls.py # Test project/task tools, Arcade load, graph invoke
+    ├── test_tool_calls.py # Test project/task tools, Arcade load (reminders=calendar), graph invoke
+    └── test_webhook_local.py # POST simulated Telegram update to local /webhook (TELEGRAM_CHAT_ID in .env; reminders=calendar)
 ```
 
 ---
@@ -215,14 +216,14 @@ jayla-pa/
 |--------|--------|
 | **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
 | **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
-| **Custom** (`tools_custom/reminders.py`) | `create_reminder`, `list_reminders`, `cancel_reminder`. Stored in Neon. Due reminders are sent (1) when the user sends any message (webhook) or (2) proactively via **GET /cron/send-reminders** if a cron job calls it. Run migration `5-reminders.sql`. |
+| **Reminders** | Calendar only. "Remind me to X at Y" → Google Calendar event (GoogleCalendar_CreateEvent). No separate reminder DB. |
 
 **Imports and packages (webhook / Railway)**
 
 - `graph.py` → `agent`, `nodes`, `langgraph` (MemorySaver, StateGraph, etc.), `langgraph.prebuilt` (ToolNode)
 - `agent.py` → `tools.get_tools_for_model`, `memory`, `prompts`, `langchain_core`, `langchain_groq`, optional `langchain_deepseek`
 - `nodes.py` → `tools.get_manager`, `langchain_core`, `langgraph.graph`
-- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`, `tools_custom.reminders.get_reminder_tools`
+- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`
 - `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
 
 **requirements-railway.txt** must include: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `psycopg2-binary`. See also `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
@@ -264,21 +265,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 - **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway.
 - After deploy, run migrations and Qdrant init once (locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
 
-**Reminders: proactive (scheduled) delivery**
-
-Due reminders are sent in two ways:
-
-1. **On next message** – When the user sends any message to the bot, due reminders for that user are sent first, then the message is processed.
-2. **Proactive (cron)** – Call **GET /cron/send-reminders** periodically (e.g. every 1–5 minutes). Protected by `CRON_SECRET`: pass it as query `?secret=YOUR_CRON_SECRET` or header `X-Cron-Secret: YOUR_CRON_SECRET`. The endpoint fetches due reminders for `EMAIL`, sends each to `TELEGRAM_CHAT_ID`, then marks them sent. Set `CRON_SECRET` in `.env` (and on Railway/Render) to a random string; do not commit it.
-
-**Cron setup (Railway / cron-job.org)**
-
-- **Generate and set CRON_SECRET:** Run `./scripts/ensure_cron_secret.sh` from `jayla-pa` to generate a secret and add it to `.env` (using sed). Then run `./scripts/set_railway_vars.sh` to sync all env vars (including `CRON_SECRET`) to Railway.
-- **Railway:** Use [Railway Cron](https://docs.railway.app/reference/cron-jobs) or an external cron service.
-- **cron-job.org (free):** Create a cron job → URL: `https://your-app.up.railway.app/cron/send-reminders?secret=YOUR_CRON_SECRET` (or your deployed BASE_URL + path). Method: GET. Schedule: e.g. every 5 minutes (`*/5 * * * *`).
-- **Other:** Any HTTP cron (e.g. GitHub Actions scheduled workflow, Uptime Robot, or a small server) that GETs the URL with the secret every 1–5 minutes.
-
-Without a cron job, reminders still fire when the user sends a message; with a cron job, they are delivered at the requested time even if the user is idle.
+**Reminders** – Reminders are Google Calendar events only. Jayla uses GoogleCalendar_CreateEvent for "remind me to X at Y"; no separate reminder DB or cron.
 
 **Verify deployed app**
 

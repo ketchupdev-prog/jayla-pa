@@ -85,11 +85,15 @@ def test_project_tools():
 
 
 def test_arcade_tools_load():
-    """Test that Arcade (Gmail, Calendar) tools load. Does not call Gmail/Calendar APIs."""
+    """Test that Arcade (Gmail, Calendar) tools load. Reminders are calendar-only (no create_reminder/list_reminders)."""
     try:
         from tools import get_tools
         tools = get_tools()
         names = [t.name for t in tools]
+        # Reminders = calendar events only; no DB reminder tools
+        reminder_tools = [n for n in names if "reminder" in n.lower()]
+        if reminder_tools:
+            return "FAIL", f"Unexpected reminder tools (reminders=calendar only): {reminder_tools}"
         return "OK", names
     except Exception as e:
         return "FAIL", str(e)
@@ -137,13 +141,13 @@ def main():
         except Exception as e:
             print(f"  FAIL: {e}")
         print()
-    # 2. Arcade tools load (include full list and calendar check)
+    # 2. Arcade tools load (Gmail, Calendar; reminders = calendar only)
     print("[2/3] Arcade tools (Gmail, Calendar) load...")
     try:
         status, data = test_arcade_tools_load()
         if status == "OK":
             calendar_tools = [n for n in data if "Calendar" in n or "calendar" in n]
-            print(f"  OK ({len(data)} tools). Calendar-related: {calendar_tools or 'NONE'}")
+            print(f"  OK ({len(data)} tools). Calendar (reminders=events): {calendar_tools or 'NONE'}")
             print(f"  All tool names: {sorted(data)}")
         else:
             print(f"  FAIL: {data}")

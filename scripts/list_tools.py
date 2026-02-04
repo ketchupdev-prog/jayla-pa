@@ -2,7 +2,7 @@
 """
 Print all tool names available to Jayla (Arcade + custom).
 Run from repo root with .env set: python scripts/list_tools.py
-Use this to verify calendar tools (GoogleCalendar_*) are loaded.
+Reminders = calendar events only (GoogleCalendar_*); no create_reminder/list_reminders.
 """
 
 import os
@@ -33,7 +33,7 @@ def main():
         calendar = [n for n in names if "Calendar" in n or "calendar" in n.lower()]
         print(f"Total tools: {len(names)}\n")
         print("Gmail (Arcade):", gmail or "NONE")
-        print("Google Calendar (Arcade):", calendar or "NONE")
+        print("Google Calendar (Arcade, reminders=events):", calendar or "NONE")
         print("\nAll tool names:")
         for n in names:
             print(f"  {n}")
