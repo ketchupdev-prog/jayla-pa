@@ -1,0 +1,15 @@
+# Don't copy secrets or venvs into the image
+.env
+.env.*
+.git
+.gitignore
+jayla/
+.venv/
+__pycache__/
+*.py[cod]
+.idea
+.vscode
+.DS_Store
+*.md
+!README.md
+uv.lock

@@ -1,0 +1,14 @@
+# Railway: use slim deps (requirements-railway.txt) for fast build. No torch/docling.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install deps only (slim list; no sentence-transformers/docling).
+COPY requirements-railway.txt .
+RUN pip install --no-cache-dir -r requirements-railway.txt
+
+# App code.
+COPY . .
+
+# Railway sets PORT at runtime.
+CMD ["sh", "-c", "exec uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port ${PORT:-8000}"]
