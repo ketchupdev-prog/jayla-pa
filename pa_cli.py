@@ -1,5 +1,6 @@
 # CLI entry for Jayla PA. See PERSONAL_ASSISTANT_PATTERNS.md §3 (CLI).
 
+import asyncio
 import os
 import sys
 
@@ -14,7 +15,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from graph import build_graph
 
 
-def main():
+async def main():
     user_id = os.environ.get("USER_ID") or os.environ.get("EMAIL", "default")
     thread_id = os.environ.get("THREAD_ID", "cli")
     config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
@@ -30,7 +31,7 @@ def main():
         if text.lower() in ("quit", "exit", "q"):
             break
         inputs = {"messages": [HumanMessage(content=text)]}
-        result = graph.invoke(inputs, config=config)
+        result = await graph.ainvoke(inputs, config=config)
         messages = result.get("messages", [])
         for m in reversed(messages):
             if hasattr(m, "content") and m.content and getattr(m, "type", None) == "ai":
@@ -42,5 +43,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
     sys.exit(0)

@@ -10,18 +10,20 @@ See **arcade-ai-agent/PERSONAL_ASSISTANT_PATTERNS.md** for full design, patterns
 
 **Requires [uv](https://docs.astral.sh/uv/)** (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `pip install uv`).
 
-### 1. Virtual environment (jayla)
+### 1. Virtual environment
 
-Create and use the **jayla** venv only (no `.venv`):
+Use **one** venv: uv’s default `.venv` (so `uv sync` and `uv run` work without warnings).
 
 ```bash
 cd jayla-pa
-uv venv jayla
-source jayla/bin/activate   # macOS/Linux; Windows: jayla\Scripts\activate
+uv venv
+source .venv/bin/activate   # macOS/Linux; Windows: .venv\Scripts\activate
 uv pip install -r requirements.txt
 ```
 
-Then run all commands with this venv active (e.g. `python scripts/run_sql_migrations.py`).
+Your prompt may show `(jayla-pa)` — that’s the project name, not a separate venv. To leave the venv: `deactivate`.
+
+Without activating: `uv run python scripts/run_sql_migrations.py`. Run all commands with this venv active (or via `uv run`).
 
 ### 2. Environment variables
 
@@ -36,7 +38,7 @@ Copy `.env.example` to `.env` and fill in:
 
 ### 3. Run SQL migrations (Neon)
 
-With `DATABASE_URL` set in `.env` (and **jayla** venv active):
+With `DATABASE_URL` set in `.env` (and venv active):
 
 ```bash
 python scripts/run_sql_migrations.py
@@ -193,7 +195,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 
 1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars (see below). The repo includes **`railway.toml`** and a **`Dockerfile`** (Railway uses it when present). The Dockerfile installs **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) for a fast build; the app starts with only FastAPI so **GET /** and **GET /health** work at once (graph loads on first webhook). Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works.  
    - **Sync env from local .env:** With [Railway CLI](https://docs.railway.app/develop/cli) installed and linked (`railway login`, `railway link`), run `./scripts/set_railway_vars.sh` from `jayla-pa` to set all variables from `.env` (skips `RAILWAY_TOKEN`). Then redeploy (`railway up` or push a commit).  
-   - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed) for `railway up` / `railway logs`.
+   - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed) for `railway up`. View deploy/runtime logs: `railway logs` (from jayla-pa with project linked).
 2. **Render** – [render.com](https://render.com): New → Web Service → Connect repo (jayla-pa) → Build: `pip install -r requirements.txt` (or use Dockerfile) → Start: `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` → Add env vars. Render gives you `https://yourapp.onrender.com`. In Namecheap, **CNAME** Host `jayla`, Value `yourapp.onrender.com`. Set `BASE_URL=https://jayla.ketchup.cc` and add `jayla.ketchup.cc` as custom domain in Render.
 
 **Requirements for any host**
@@ -216,13 +218,20 @@ Railway returns 502 when its edge proxy cannot reach your app. Per [Railway’s 
 3. **Check deployment logs** – Railway → **Deployments** → latest deployment → **View logs**. Look for Python tracebacks, `ModuleNotFoundError`, or `KeyError` (e.g. missing env var). The app defers loading the graph and Telegram until the first `/webhook`, so **GET /** and **GET /health** should work as soon as the process is up; if you still see 502, the process is likely crashing before binding (logs will show why).
 4. **Remove conflicting config** – If you use the repo’s Dockerfile, do **not** set `startCommand` in `railway.toml` (or the dashboard). Railway runs that command without a shell, so `$PORT` is not expanded and uvicorn gets the literal `$PORT` → "Invalid value for '--port'". The repo’s `railway.toml` leaves `startCommand` unset so the Dockerfile CMD runs (it uses `sh -c` and expands `$PORT`). Remove any Procfile or `railway.json` start command that might override the Dockerfile CMD.
 
+**Deploy failed (build or runtime)**
+
+1. **Paste the exact error** – In Railway: **Deployments** → failed deployment → **Build** tab (for build failures) or **Deploy** tab (for runtime). Copy the last 30–50 lines and share them so we can target the fix.
+2. **Build failing** – Check that the log says it’s using the **Dockerfile** (e.g. “Building with Dockerfile” or “DOCKERFILE builder”). If it says Nixpacks or Railpack, set **Settings** → **Build** → Builder to **Dockerfile**, or ensure `railway.toml` has `[build]` and `builder = "DOCKERFILE"`. If `pip install` fails, the log will show the failing package (e.g. missing system lib or network).
+3. **Runtime failing** – Deploy logs may show `ModuleNotFoundError`, `ImportError`, or `KeyError` (missing env). Set all required env vars in Railway (see `.env.example`). The app does not read `.env` in the image; Railway injects variables at runtime.
+4. **Root Directory** – If the GitHub repo is the **whole monorepo** (e.g. `ai-agent-mastery-main`), set Railway **Settings** → **General** → **Root Directory** to `jayla-pa` so the Dockerfile at `jayla-pa/Dockerfile` is used. If the repo is **only** `jayla-pa`, leave Root Directory empty.
+
 ---
 
 ## Quick start
 
 ```bash
 cd jayla-pa
-uv venv jayla && source jayla/bin/activate
+uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 # copy .env.example to .env and set DATABASE_URL, ARCADE_API_KEY, QDRANT_URL, etc.
 python scripts/run_sql_migrations.py

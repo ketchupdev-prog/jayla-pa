@@ -1,6 +1,6 @@
-# Venv (project uses jayla only; ignore .venv if recreated by uv run)
-jayla/
+# Venv (use .venv; ignore jayla/ if leftover from old setup)
 .venv/
+jayla/
 
 # Env and secrets
 .env
