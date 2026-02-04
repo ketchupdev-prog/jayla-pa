@@ -40,7 +40,7 @@ async def main():
             continue
         if text.lower() in ("quit", "exit", "q"):
             break
-        inputs = {"messages": [HumanMessage(content=text)]}
+        inputs = {"messages": [HumanMessage(content=text)], "step_count": 0}
         result = await graph.ainvoke(inputs, config=config)
         messages = result.get("messages", [])
         for m in reversed(messages):

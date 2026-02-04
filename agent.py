@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import MessagesState
+from state import JaylaState
 
 try:
     from langchain_deepseek import ChatDeepSeek
@@ -116,7 +116,7 @@ def _get_model():
     )
 
 
-def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
+def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
     messages = state["messages"]
     # Store comes from config if not passed (webhook/pa_cli set config["configurable"]["store"])
     store = store or (config.get("configurable") or {}).get("store")
@@ -196,4 +196,5 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
     model_with_tools = model.bind_tools(get_tools_for_model())
     msgs = [SystemMessage(content=system_content)] + list(trimmed)
     response = model_with_tools.invoke(msgs)
-    return {"messages": [response]}
+    step_count = state.get("step_count", 0) + 1
+    return {"messages": [response], "step_count": step_count}

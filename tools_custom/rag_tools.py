@@ -21,6 +21,16 @@ def search_my_documents(query: str, limit: int = 5) -> str:
     return "Relevant passages from your documents:\n\n" + "\n\n---\n\n".join(chunks)
 
 
+@tool
+def suggest_email_body_from_context(purpose: str, recipient: str = "") -> str:
+    """Suggest an email body from the user's document context (RAG). Call when the user wants to draft an email and you have or can retrieve relevant context. Returns suggested bullet points; use them in Gmail draft tools."""
+    user_id = _get_user_id()
+    chunks = rag_retrieve(purpose.strip(), user_id=user_id, limit=3)
+    if not chunks:
+        return "No relevant document context. Compose the email from scratch."
+    return "Suggested points from your documents:\n\n" + "\n\n".join(f"• {c}" for c in chunks)
+
+
 def get_rag_tools():
     """Return list of RAG tools for the agent."""
-    return [search_my_documents]
+    return [search_my_documents, suggest_email_body_from_context]

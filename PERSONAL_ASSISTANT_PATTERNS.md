@@ -230,6 +230,24 @@ For a minimal setup (e.g. pa-agent3-style loop without memory), you can use a sh
 
 ---
 
+## 10. Gems from Supervisor Pattern (7.7-SupervisorAgent)
+
+Patterns from **7_Agent_Architecture/7.7-SupervisorAgent** that enhance jayla-pa: web search for “current” questions, concise tool summaries, step limit, research-aware email drafting, fallback hint, optional deps, and tests. **Full code for each gem** is in **PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md §D**.
+
+| Gem | Purpose |
+|-----|--------|
+| **Brave web search** | For “latest”, “current”, “news” queries; use `search_web` when user asks for real-time info; use `search_my_documents` for the user’s uploaded docs. |
+| **Prompt: concise tool results** | Ask the model to summarize tool results in 2–4 bullets when replying to the user; avoid pasting raw JSON or long lists. |
+| **Max steps in graph** | Cap agent→tools→agent iterations (e.g. 15–20) to prevent infinite loops and control cost; then END and return last reply. |
+| **Research-aware email draft** | When drafting email, pre-fill body from RAG/context (bullets); optional tool `suggest_email_body_from_context` returns suggested body text for the agent to pass to Gmail draft. |
+| **Fallback hint** | If the user is just chatting or intent is unclear, answer briefly and optionally suggest: “I can also search your docs, check your calendar, or draft an email if you’d like.” |
+| **Optional deps module** | Group env-derived deps (e.g. BRAVE_API_KEY, DATABASE_URL) into a small `deps` module and pass into config so tools stay testable. |
+| **Pytest** | Add `tests/` with e.g. test_agent.py (call_agent with mocks), test_rag.py (retrieve), test_graph.py (invoke), test_webhook.py (document/voice/retention). |
+
+**Quick wins (in order):** (1) Brave web search tool, (2) prompt tweak for tool summaries, (3) max steps in graph, (4) research-aware draft prompt/helper, (5) pytest.
+
+---
+
 # Appendix reference
 
-**Full project structure, workflows, and reference code** (updated for jayla-pa): see **PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md** in this directory.
+**Full project structure, workflows, and reference code** (updated for jayla-pa): see **PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md** in this directory. **Gems implementation (full code)** for §10: Appendix **D** in PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md.

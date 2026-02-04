@@ -34,6 +34,7 @@ Copy `.env.example` to `.env` and fill in:
 - **User:** `USER_ID` (or `EMAIL`). Optional for CLI: `USER_NAME`, `USER_ROLE`, `USER_COMPANY`, `TIMEZONE`; in Telegram Jayla asks for name/role/company if not set and stores them (and onboarding: key dates, communication preferences, current work context) per chat in Neon.
 - **Neon:** `DATABASE_URL` (project management + RAG)
 - **Qdrant:** `QDRANT_URL`, `QDRANT_API_KEY` (long-term memory)
+- **Brave Search (optional):** `BRAVE_API_KEY` — web search for "latest", "current", "news". Set on Railway for webhook.
 - **Telegram (optional):** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`, `BASE_URL`
 
 ### 3. Run SQL migrations (Neon)
@@ -199,7 +200,8 @@ jayla-pa/
 │   └── webhook.py
 ├── tools_custom/
 │   ├── project_tasks.py
-│   ├── rag_tools.py       # search_my_documents (RAG)
+│   ├── rag_tools.py       # search_my_documents, suggest_email_body_from_context (RAG)
+│   ├── brave_tools.py     # search_web (Brave API; optional BRAVE_API_KEY)
 │   └── gmail_attachment.py
 └── scripts/
     ├── run_sql_migrations.py
@@ -250,6 +252,18 @@ print('Graph build: ok')
 "
 ```
 
+### Tests
+
+Unit tests run with mocks (no DB/LLM required). Integration tests use the real DB when `DATABASE_URL` is set:
+
+```bash
+cd jayla-pa
+pytest tests/ -v
+```
+
+- **Without `DATABASE_URL`:** All unit tests run; `test_retrieve_with_real_db` is skipped.
+- **With `DATABASE_URL`:** Same plus integration test `test_retrieve_with_real_db` runs against Neon/Postgres (returns list; may be empty if no documents).
+
 ---
 
 ## Deployment
@@ -273,7 +287,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 **Requirements for any host**
 
 - **Start command:** `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` (use `$PORT` or the platform’s env).
-- **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway.
+- **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway. For web search in Telegram, set **`BRAVE_API_KEY`** on Railway (same script syncs it from `.env`).
 - After deploy, run migrations and Qdrant init once (locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
 
 **Reminders** – Reminders are Google Calendar events only. Jayla uses GoogleCalendar_CreateEvent for "remind me to X at Y"; no separate reminder DB or cron.

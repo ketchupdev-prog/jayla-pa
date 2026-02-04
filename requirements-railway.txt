@@ -1,5 +1,6 @@
 # Slim deps for Railway webhook deploy. Excludes sentence-transformers/docling (torch) to avoid build timeout.
 # Full stack (RAG, local embeddings): use requirements.txt and run locally.
+# httpx: required for Brave Search (search_web tool).
 langgraph
 langchain-core
 langchain-groq
@@ -11,4 +12,5 @@ python-dotenv
 fastapi
 uvicorn
 python-telegram-bot
+httpx
 psycopg2-binary

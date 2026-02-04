@@ -25,3 +25,10 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore:AgentStatePydantic has been moved:",
+]

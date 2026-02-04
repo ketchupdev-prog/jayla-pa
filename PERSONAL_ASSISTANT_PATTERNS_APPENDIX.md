@@ -591,4 +591,373 @@ docx2txt
 
 ---
 
+## D. Gems implementation (full code)
+
+Full code for the gems from **7.7-SupervisorAgent** (PERSONAL_ASSISTANT_PATTERNS.md §10). Copy into the codebase when implementing.
+
+### D.1 Brave web search tool
+
+**New file: `tools_custom/brave_tools.py`**
+
+```python
+# Brave Search tool for "current" / "latest" / "news" queries. See PERSONAL_ASSISTANT_PATTERNS.md §10.
+
+import os
+import time
+import logging
+from typing import Any
+
+from langchain_core.tools import tool
+
+logger = logging.getLogger(__name__)
+
+
+def _search_brave_sync(api_key: str, query: str, count: int = 5) -> list[dict[str, Any]]:
+    """Call Brave Search API (sync). Returns list of {title, url, description, score}."""
+    if not api_key or not query or not query.strip():
+        return []
+    count = min(max(count, 1), 10)
+    try:
+        import httpx
+    except ImportError:
+        logger.warning("httpx not installed; pip install httpx for Brave search")
+        return []
+    headers = {"X-Subscription-Token": api_key, "Accept": "application/json"}
+    params = {"q": query.strip(), "count": count}
+    time.sleep(0.5)  # Light rate limiting
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            r = client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers=headers,
+                params=params,
+            )
+            if r.status_code != 200:
+                logger.warning(f"Brave API {r.status_code}: {r.text[:200]}")
+                return []
+            data = r.json()
+            web = data.get("web", {}).get("results", [])
+            out = []
+            for i, item in enumerate(web):
+                score = max(0.1, 1.0 - (i * 0.05))
+                out.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "description": item.get("description", ""),
+                    "score": score,
+                })
+            return out
+    except Exception as e:
+        logger.warning(f"Brave search failed: {e}")
+        return []
+
+
+@tool
+def search_web(query: str, max_results: int = 5) -> str:
+    """Search the web for current information (news, trends, latest). Call this when the user asks for "latest", "current", "news", "what's happening", or real-time info. Use search_my_documents for the user's uploaded docs."""
+    api_key = os.environ.get("BRAVE_API_KEY", "").strip()
+    if not api_key:
+        return "Web search is not configured (BRAVE_API_KEY missing). I can only search your uploaded documents."
+    try:
+        results = _search_brave_sync(api_key, query, max_results)
+    except Exception as e:
+        return f"Web search failed: {e}"
+    if not results:
+        return "No web results found for that query."
+    lines = ["Web search results:\n"]
+    for r in results[:max_results]:
+        lines.append(f"- **{r.get('title', '')}**\n  {r.get('url', '')}\n  {r.get('description', '')}")
+    return "\n".join(lines)
+
+
+def get_brave_tools():
+    """Return list of Brave tools (empty if BRAVE_API_KEY not set)."""
+    if os.environ.get("BRAVE_API_KEY", "").strip():
+        return [search_web]
+    return []
+```
+
+**Change in `tools.py`:** add Brave tools to `get_tools()`:
+
+```python
+def get_tools():
+    from tools_custom.project_tasks import get_project_tools
+    from tools_custom.rag_tools import get_rag_tools
+    from tools_custom.brave_tools import get_brave_tools
+    manager = get_manager()
+    arcade_tools = manager.to_langchain(use_interrupts=True)
+    return arcade_tools + get_project_tools() + get_rag_tools() + get_brave_tools()
+```
+
+**Prompt addition (in `prompts.py` JAYLA_SYSTEM_PROMPT, under Tools):**
+
+```
+- **Web search:** When the user asks for "latest", "current", "news", "what's happening with X", or real-time information, call search_web(query). Use search_my_documents for their uploaded documents only.
+```
+
+**`.env.example`:** add `BRAVE_API_KEY=` (optional). **requirements.txt:** add `httpx` for Brave API calls.
+
+---
+
+### D.2 Prompt: concise tool results
+
+**Add to `JAYLA_SYSTEM_PROMPT` in prompts.py (e.g. after "Be concise."):**
+
+```
+When reporting tool results to the user, use 2–4 bullet points; avoid pasting raw JSON or long lists. Summarize what was done or what was found.
+```
+
+---
+
+### D.3 Max steps in graph
+
+**Option A: use config only (no state change).** In `nodes.py`, `should_continue` receives `(state, config)`. Increment a step counter in config from outside (e.g. webhook) each time you invoke the graph and stop after N invocations — or use a single invoke and count steps inside the graph by extending state (Option B).
+
+**Option B: extend state with step_count.** Custom state and conditional END when step_count >= MAX_STEPS.
+
+**New state (e.g. in `graph.py` or a small `state.py`):**
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph.message import add_messages
+
+class JaylaState(TypedDict, total=False):
+    messages: Annotated[list, add_messages]
+    step_count: int
+
+MAX_GRAPH_STEPS = 20
+```
+
+**In `graph.py`:**
+
+```python
+from state import JaylaState, MAX_GRAPH_STEPS  # or define JaylaState/MAX_GRAPH_STEPS in graph.py
+
+def build_graph(checkpointer=None):
+    workflow = StateGraph(JaylaState)
+    workflow.add_node("agent", call_agent)
+    workflow.add_node("tools", _tools_node)
+    workflow.add_node("authorization", authorize)
+    workflow.add_edge(START, "agent")
+    workflow.add_conditional_edges("agent", should_continue, ["authorization", "tools", END])
+    workflow.add_edge("authorization", "tools")
+    workflow.add_edge("tools", "agent")
+    memory = checkpointer or MemorySaver()
+    return workflow.compile(checkpointer=memory)
+```
+
+**In `nodes.py`, `should_continue`:** accept `(state, config)`; if `state.get("step_count", 0) >= MAX_GRAPH_STEPS`, return `END`. Otherwise keep existing logic (authorization / tools / END).
+
+**In `agent.py` and tools node:** return `{"messages": [...], "step_count": state.get("step_count", 0) + 1}` so step_count increments each agent→tools→agent cycle.
+
+**Initial state from webhook/CLI:** `inputs = {"messages": [HumanMessage(content=text)], "step_count": 0}`. If you keep using `MessagesState` only, you cannot add step_count to state without changing the state type; then use Option A (external counter) or add a wrapper that counts steps per single `ainvoke` by inspecting the number of tool rounds in the result.
+
+**Minimal Option A (no state change):** In `nodes.should_continue`, read `config.get("configurable", {}).get("step_count", 0)`. The webhook would need to pass `step_count` and somehow increment it — but config is read-only per invoke. So the clean approach is Option B: define `JaylaState` with `messages` and `step_count`, and have both agent and tools nodes return `step_count: state.get("step_count", 0) + 1`. Then in `should_continue(state, config)`: if `state.get("step_count", 0) >= MAX_GRAPH_STEPS`, return `END`.
+
+**Full `nodes.py` change for Option B:**
+
+```python
+# At top: from graph.state import MAX_GRAPH_STEPS  # or define MAX_GRAPH_STEPS = 20 in nodes.py
+
+def should_continue(state, config=None):
+    if state.get("step_count", 0) >= MAX_GRAPH_STEPS:
+        return END
+    if not state["messages"]:
+        return END
+    last = state["messages"][-1]
+    # ... rest unchanged: tool_calls → authorization or tools, else END
+```
+
+**Full `graph.py` (with JaylaState):**
+
+```python
+from typing import Annotated, TypedDict
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
+from agent import call_agent
+from nodes import authorize, should_continue
+
+class JaylaState(TypedDict, total=False):
+    messages: Annotated[list, add_messages]
+    step_count: int
+
+MAX_GRAPH_STEPS = 20
+
+async def _tools_node(state, config):
+    from tools import get_tool_node
+    result = await get_tool_node().ainvoke(state, config)
+    result["step_count"] = state.get("step_count", 0) + 1
+    return result
+
+def build_graph(checkpointer=None):
+    workflow = StateGraph(JaylaState)
+    workflow.add_node("agent", call_agent)
+    workflow.add_node("tools", _tools_node)
+    workflow.add_node("authorization", authorize)
+    workflow.add_edge(START, "agent")
+    workflow.add_conditional_edges("agent", should_continue, ["authorization", "tools", END])
+    workflow.add_edge("authorization", "tools")
+    workflow.add_edge("tools", "agent")
+    memory = checkpointer or MemorySaver()
+    return workflow.compile(checkpointer=memory)
+```
+
+**`call_agent` must return `step_count` too:** e.g. `return {"messages": [response], "step_count": state.get("step_count", 0) + 1}`. Webhook/CLI initial state: `{"messages": [HumanMessage(content=text)], "step_count": 0}`.
+
+---
+
+### D.4 Research-aware email draft
+
+**Prompt addition (in prompts.py, under Tools / Emails):**
+
+```
+When drafting an email and you have document context (RAG) or previous context, use it: summarize 2–3 key points as bullet points in the email body instead of writing from scratch. If the user said "draft an email to X about Y", first use document context or search_my_documents if relevant, then compose the draft with those points.
+```
+
+**Optional tool: suggest body from context (in `tools_custom/rag_tools.py`):**
+
+```python
+import os
+from langchain_core.tools import tool
+from rag import retrieve as rag_retrieve
+
+@tool
+def suggest_email_body_from_context(purpose: str, recipient: str = "") -> str:
+    """Suggest an email body from the user's document context (RAG). Call when the user wants to draft an email and you have or can retrieve relevant context. Returns suggested bullet points; use them in Gmail draft tools."""
+    user_id = os.environ.get("USER_ID") or os.environ.get("EMAIL", "default-user")
+    chunks = rag_retrieve(purpose, user_id=user_id, limit=3)
+    if not chunks:
+        return "No relevant document context. Compose the email from scratch."
+    return "Suggested points from your documents:\n\n" + "\n\n".join(f"• {c}" for c in chunks)
+```
+
+Register `suggest_email_body_from_context` in `get_rag_tools()` (return it alongside `search_my_documents`) and mention it in the prompt.
+
+---
+
+### D.5 Fallback hint
+
+**Add one line to `JAYLA_SYSTEM_PROMPT` (e.g. near the end of general instructions):**
+
+```
+If the user is just chatting or the request is unclear, answer briefly and optionally suggest: "I can also search your docs, check your calendar, or draft an email if you'd like."
+```
+
+---
+
+### D.6 Optional deps module
+
+**New file: `deps.py` (at jayla-pa root)**
+
+```python
+# Optional dependency injection for tools. See PERSONAL_ASSISTANT_PATTERNS.md §10.
+
+import os
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class JaylaDeps:
+    """Env-derived deps passed via config for testability."""
+    user_id: str
+    brave_api_key: Optional[str] = None
+    database_url: Optional[str] = None
+
+    @classmethod
+    def from_env(cls, user_id: Optional[str] = None) -> "JaylaDeps":
+        return cls(
+            user_id=(user_id or os.environ.get("EMAIL") or os.environ.get("USER_ID") or "default"),
+            brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip() or None,
+            database_url=os.environ.get("DATABASE_URL"),
+        )
+```
+
+Webhook/CLI can build `config["configurable"]["deps"] = JaylaDeps.from_env(user_id=...)` and tools that need Brave or DB can read from config instead of `os.environ` directly (so tests can inject mocks).
+
+---
+
+### D.7 Pytest examples
+
+**New directory: `tests/` with `conftest.py` and test modules.**
+
+**`tests/conftest.py`:**
+
+```python
+import os
+import pytest
+
+@pytest.fixture(autouse=True)
+def env_jayla(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", os.environ.get("DATABASE_URL", "postgresql://localhost/test"))
+    monkeypatch.setenv("EMAIL", "test@example.com")
+```
+
+**`tests/test_rag.py`:**
+
+```python
+import pytest
+from rag import retrieve, update_documents_retention
+
+def test_retrieve_empty_query():
+    assert retrieve("", user_id="test") == []
+
+def test_retrieve_no_db(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "")
+    with pytest.raises(Exception):
+        retrieve("hello", user_id="test")
+```
+
+**`tests/test_agent.py` (minimal; mock tools):**
+
+```python
+import pytest
+from unittest.mock import patch, MagicMock
+from langchain_core.messages import HumanMessage
+from agent import call_agent
+
+@pytest.fixture
+def minimal_config():
+    return {
+        "configurable": {
+            "thread_id": "test",
+            "user_id": "test@example.com",
+            "user_name": "",
+            "user_role": "",
+            "user_company": "",
+            "key_dates": "",
+            "communication_preferences": "",
+            "current_work_context": "",
+        }
+    }
+
+def test_call_agent_returns_messages(minimal_config):
+    with patch("agent.get_tools_for_model", return_value=[]):
+        state = {"messages": [HumanMessage(content="Hi")]}
+        out = call_agent(state, minimal_config)
+        assert "messages" in out
+        assert len(out["messages"]) == 1
+```
+
+**`tests/test_graph.py`:**
+
+```python
+import pytest
+from langchain_core.messages import HumanMessage
+from graph import build_graph
+
+@pytest.mark.asyncio
+async def test_graph_invoke():
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "test", "user_id": "test@example.com"}}
+    inputs = {"messages": [HumanMessage(content="Hello")]}
+    result = await graph.ainvoke(inputs, config=config)
+    assert "messages" in result
+```
+
+**`requirements.txt`:** add `pytest`, `pytest-asyncio` for async tests. Run: `pytest tests/ -v`.
+
+---
+
 *End of appendix. This document is the jayla-pa implementation reference; see also ONBOARDING_PLAN.md and PERSONAL_ASSISTANT_PATTERNS.md.*

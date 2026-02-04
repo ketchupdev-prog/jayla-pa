@@ -200,7 +200,7 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             }
         }
         graph = _get_graph()
-        inputs = {"messages": [HumanMessage(content=text)]}
+        inputs = {"messages": [HumanMessage(content=text)], "step_count": 0}
         await send_typing(chat_id=chat_id)
         result = await graph.ainvoke(inputs, config=config)
         messages = result.get("messages", [])

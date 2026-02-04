@@ -1,15 +1,18 @@
-# Routing and authorization nodes. See PERSONAL_ASSISTANT_PATTERNS.md C.3.
-# Arcade: authorize first (show URL, wait for completion), then continue. Google Calendar auth is the same as Gmail — both use manager.authorize(tool_name, user_id); one flow for all Arcade tools (Gmail, Google Calendar, etc.).
+# Routing and authorization nodes. See PERSONAL_ASSISTANT_PATTERNS.md C.3, §10 (max steps).
 
 import os
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, MessagesState
+from langgraph.graph import END
+
+from state import MAX_GRAPH_STEPS
 from tools import get_manager
 
 
-def should_continue(state: MessagesState):
-    if not state["messages"]:
+def should_continue(state):
+    if state.get("step_count", 0) >= MAX_GRAPH_STEPS:
+        return END
+    if not state.get("messages"):
         return END
     last = state["messages"][-1]
     if not getattr(last, "tool_calls", None):
@@ -26,7 +29,7 @@ def should_continue(state: MessagesState):
     return "tools"
 
 
-def authorize(state: MessagesState, config: RunnableConfig):
+def authorize(state, config: RunnableConfig):
     """Arcade auth (same for Gmail and Google Calendar): authorize first, then continue. Uses manager.authorize(tool_name, user_id). If not completed, show URL and either block (CLI) or return link in ToolMessages (webhook)."""
     user_id = config.get("configurable", {}).get("user_id") or os.environ.get("EMAIL", "")
     manager = get_manager()

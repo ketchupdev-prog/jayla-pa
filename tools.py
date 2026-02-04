@@ -23,9 +23,10 @@ def get_manager():
 def get_tools():
     from tools_custom.project_tasks import get_project_tools
     from tools_custom.rag_tools import get_rag_tools
+    from tools_custom.brave_tools import get_brave_tools
     manager = get_manager()
     arcade_tools = manager.to_langchain(use_interrupts=True)
-    return arcade_tools + get_project_tools() + get_rag_tools()
+    return arcade_tools + get_project_tools() + get_rag_tools() + get_brave_tools()
 
 
 def get_tools_for_model():

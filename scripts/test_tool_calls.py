@@ -141,7 +141,7 @@ async def _run_graph_with_events(input_text: str, config: dict, log_events: bool
     from graph import build_graph
 
     graph = build_graph()
-    inputs = {"messages": [HumanMessage(content=input_text)]}
+    inputs = {"messages": [HumanMessage(content=input_text)], "step_count": 0}
     result_state = None
 
     async for event in graph.astream_events(inputs, config=config, version="v2"):
@@ -582,7 +582,7 @@ def main():
             }
         }
         result = asyncio.run(graph.ainvoke(
-            {"messages": [HumanMessage(content="List my projects. Reply in one short sentence.")]},
+            {"messages": [HumanMessage(content="List my projects. Reply in one short sentence.")], "step_count": 0},
             config=config,
         ))
         messages = result.get("messages", [])
@@ -648,7 +648,7 @@ def main():
                 "store": get_memory_store(),
             }
         }
-        # Prompts that should trigger each tool (or category). Run and print full output.
+        # Prompts that should trigger each tool (or category). Fixed list of 7 — not a loop; each run is one full graph (RAG + LLM + tool).
         tool_prompts = [
             ("list_projects", "List my projects."),
             ("list_tasks", "List my tasks."),
@@ -658,7 +658,9 @@ def main():
             ("Gmail_ListDraftEmails", "List my draft emails."),
             ("Gmail_ListLabels", "List my Gmail labels."),
         ]
-        for tool_hint, prompt in tool_prompts:
+        n_total = len(tool_prompts)
+        for i, (tool_hint, prompt) in enumerate(tool_prompts, 1):
+            print(f"  ({i}/{n_total}) {tool_hint}...", flush=True)
             state = asyncio.run(_run_graph_with_events(prompt, config=config, log_events=False))
             content = _last_ai_content(state.get("messages", [])) or ""
             print(f"  [{tool_hint}]\n{content}\n")
