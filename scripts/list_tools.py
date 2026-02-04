@@ -29,9 +29,11 @@ def main():
         from tools import get_tools
         tools = get_tools()
         names = sorted([t.name for t in tools])
-        calendar = [n for n in names if "Calendar" in n or "calendar" in n]
+        gmail = [n for n in names if "Gmail" in n or "gmail" in n.lower()]
+        calendar = [n for n in names if "Calendar" in n or "calendar" in n.lower()]
         print(f"Total tools: {len(names)}\n")
-        print("Calendar-related:", calendar or "NONE")
+        print("Gmail (Arcade):", gmail or "NONE")
+        print("Google Calendar (Arcade):", calendar or "NONE")
         print("\nAll tool names:")
         for n in names:
             print(f"  {n}")

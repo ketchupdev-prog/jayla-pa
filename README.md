@@ -215,13 +215,14 @@ jayla-pa/
 |--------|--------|
 | **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
 | **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
+| **Custom** (`tools_custom/reminders.py`) | `create_reminder`, `list_reminders`, `cancel_reminder`. Stored in Neon. Due reminders are sent (1) when the user sends any message (webhook) or (2) proactively via **GET /cron/send-reminders** if a cron job calls it. Run migration `5-reminders.sql`. |
 
 **Imports and packages (webhook / Railway)**
 
 - `graph.py` → `agent`, `nodes`, `langgraph` (MemorySaver, StateGraph, etc.), `langgraph.prebuilt` (ToolNode)
 - `agent.py` → `tools.get_tools_for_model`, `memory`, `prompts`, `langchain_core`, `langchain_groq`, optional `langchain_deepseek`
 - `nodes.py` → `tools.get_manager`, `langchain_core`, `langgraph.graph`
-- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`
+- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`, `tools_custom.reminders.get_reminder_tools`
 - `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
 
 **requirements-railway.txt** must include: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `psycopg2-binary`. See also `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
@@ -262,6 +263,22 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 - **Start command:** `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` (use `$PORT` or the platform’s env).
 - **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway.
 - After deploy, run migrations and Qdrant init once (locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
+
+**Reminders: proactive (scheduled) delivery**
+
+Due reminders are sent in two ways:
+
+1. **On next message** – When the user sends any message to the bot, due reminders for that user are sent first, then the message is processed.
+2. **Proactive (cron)** – Call **GET /cron/send-reminders** periodically (e.g. every 1–5 minutes). Protected by `CRON_SECRET`: pass it as query `?secret=YOUR_CRON_SECRET` or header `X-Cron-Secret: YOUR_CRON_SECRET`. The endpoint fetches due reminders for `EMAIL`, sends each to `TELEGRAM_CHAT_ID`, then marks them sent. Set `CRON_SECRET` in `.env` (and on Railway/Render) to a random string; do not commit it.
+
+**Cron setup (Railway / cron-job.org)**
+
+- **Generate and set CRON_SECRET:** Run `./scripts/ensure_cron_secret.sh` from `jayla-pa` to generate a secret and add it to `.env` (using sed). Then run `./scripts/set_railway_vars.sh` to sync all env vars (including `CRON_SECRET`) to Railway.
+- **Railway:** Use [Railway Cron](https://docs.railway.app/reference/cron-jobs) or an external cron service.
+- **cron-job.org (free):** Create a cron job → URL: `https://your-app.up.railway.app/cron/send-reminders?secret=YOUR_CRON_SECRET` (or your deployed BASE_URL + path). Method: GET. Schedule: e.g. every 5 minutes (`*/5 * * * *`).
+- **Other:** Any HTTP cron (e.g. GitHub Actions scheduled workflow, Uptime Robot, or a small server) that GETs the URL with the secret every 1–5 minutes.
+
+Without a cron job, reminders still fire when the user sends a message; with a cron job, they are delivered at the requested time even if the user is idle.
 
 **Verify deployed app**
 
@@ -305,6 +322,6 @@ python pa_cli.py
 - **Startup:** The webhook app loads only FastAPI at startup; the graph and Telegram client are loaded on the first `POST /webhook`. This keeps **GET /** and **GET /health** working even if env vars for Arcade/LLM/Telegram are missing or misconfigured (only the first webhook request would fail).
 - **User profiles & onboarding:** Profile (name, role, company) and onboarding (key_dates, communication_preferences, current_work_context) are loaded per thread and **injected into the system prompt** so Jayla replies in the user’s preferred style and uses projects/deadlines/tasks/reminders. See ONBOARDING_PLAN.md.
 - **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
-- **Arcade (Gmail / Calendar):** Same as docs: **authorize first, then continue.** User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
+- **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
 - **Memory:** The graph does not pass a store into the agent by default; add a LangGraph Store or Qdrant for `memory_context`.
 - **RAG:** `rag.py` is a stub; implement Docling + all-mpnet-base-v2 + Neon for document ingest and retrieval (see ONBOARDING_PLAN.md Phase 2–3).

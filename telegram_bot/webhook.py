@@ -20,6 +20,7 @@ if os.path.isfile(_env_path):
                     os.environ.setdefault(k, v)
 
 from fastapi import FastAPI, Request, Header
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -42,6 +43,39 @@ async def root():
 @app.get("/health")
 async def health():
     return {"ok": True, "status": "healthy"}
+
+
+@app.get("/cron/send-reminders")
+async def cron_send_reminders(
+    secret: str | None = None,
+    x_cron_secret: str | None = Header(None, alias="X-Cron-Secret"),
+):
+    """Proactive reminder delivery. Call periodically (e.g. every 1–5 min) from a cron job.
+    Requires CRON_SECRET in query ?secret=... or header X-Cron-Secret."""
+    cron_secret = (os.environ.get("CRON_SECRET") or "").strip()
+    if not cron_secret:
+        return JSONResponse({"ok": False, "error": "CRON_SECRET not configured"}, status_code=503)
+    provided = (secret or "") or (x_cron_secret or "")
+    if provided != cron_secret:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    user_id = (os.environ.get("EMAIL") or "").strip()
+    chat_id = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if not user_id or not chat_id:
+        return JSONResponse({"ok": False, "error": "EMAIL and TELEGRAM_CHAT_ID required"}, status_code=400)
+    try:
+        from tools_custom.reminders import get_due_reminders, mark_reminders_sent
+        from telegram_bot.client import send_message
+        due = get_due_reminders(user_id)
+        sent_ids = []
+        for _id, msg in due:
+            await send_message(f"⏰ Reminder: {msg}", chat_id=chat_id)
+            sent_ids.append(_id)
+        if sent_ids:
+            mark_reminders_sent(sent_ids)
+        return {"ok": True, "sent": len(sent_ids)}
+    except Exception as e:
+        print(f"[cron] send-reminders error: {e}", flush=True)
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 @app.post("/webhook")
@@ -100,6 +134,22 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         print(f"[webhook] Skipping: chat_id {chat_id} != TELEGRAM_CHAT_ID {allowed_chat}", flush=True)
         return {"ok": True}
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
+    # Send any due reminders for this user before processing the message (fetch → send → mark sent)
+    try:
+        from tools_custom.reminders import get_due_reminders, mark_reminders_sent
+        from telegram_bot.client import send_message
+        user_id = os.environ.get("EMAIL", "")
+        if user_id:
+            due = get_due_reminders(user_id)
+            sent_ids = []
+            for _id, msg in due:
+                await send_message(f"⏰ Reminder: {msg}", chat_id=chat_id)
+                sent_ids.append(_id)
+            if sent_ids:
+                mark_reminders_sent(sent_ids)
+                print(f"[webhook] Sent {len(sent_ids)} reminder(s) to chat_id={chat_id}", flush=True)
+    except Exception as rem_err:
+        print(f"[webhook] Reminders delivery skip: {rem_err}", flush=True)
     try:
         from langchain_core.messages import HumanMessage
         from telegram_bot.client import send_message, send_typing
