@@ -181,6 +181,45 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
                 except Exception:
                     pass
                 return {"ok": True}
+    # If message.photo: download largest size → Groq vision → inject description as [Image: ...]
+    if not text and message.get("photo"):
+        photos = message.get("photo") or []
+        if photos:
+            # Telegram sends multiple sizes; last is largest
+            largest = photos[-1]
+            file_id = largest.get("file_id")
+            if file_id:
+                try:
+                    from telegram_bot.client import get_bot
+                    from vision import analyze_image
+                    bot = get_bot()
+                    tg_file = await bot.get_file(file_id)
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        tmp.close()
+                        await tg_file.download_to_drive(tmp.name)
+                        with open(tmp.name, "rb") as f:
+                            image_bytes = f.read()
+                        try:
+                            os.unlink(tmp.name)
+                        except OSError:
+                            pass
+                    caption = (message.get("caption") or "").strip()
+                    description = await analyze_image(
+                        image_bytes,
+                        "Describe what you see in this image in one or two short sentences for a personal assistant.",
+                    )
+                    text = f"{caption}\n[Image: {description}]".strip() if caption else f"[Image: {description}]"
+                    print(f"[webhook] Vision for chat_id={chat_id}: {description[:60]!r}...", flush=True)
+                except Exception as v_err:
+                    import traceback
+                    traceback.print_exc()
+                    print(f"[webhook] Vision failed for chat_id={chat_id}: {v_err}", flush=True)
+                    try:
+                        from telegram_bot.client import send_message
+                        await send_message("I couldn't analyze that image. Please try again or send a caption.", chat_id=chat_id)
+                    except Exception:
+                        pass
+                    return {"ok": True}
     if not text:
         return {"ok": True}
     allowed_chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()

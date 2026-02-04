@@ -183,7 +183,10 @@ jayla-pa/
 ├── speech_to_text.py       # STT (Groq Whisper) for voice messages
 ├── user_profile.py         # Load/save profile + onboarding per thread (Neon)
 ├── docs/
-│   └── STT_TTS_GROQ.md
+│   ├── STT_TTS_GROQ.md
+│   ├── WHERE_DATA_IS_STORED.md
+│   ├── AVA_VS_JAYLA_IMAGE_OCR.md   # Ava has OCR/vision + image gen; Jayla does not yet
+│   └── SUPERVISOR_AGENT_GEMS.md
 ├── ONBOARDING_PLAN.md      # Onboarding flow (5 questions + doc upload)
 ├── PERSONAL_ASSISTANT_PATTERNS.md
 ├── PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md
@@ -202,11 +205,13 @@ jayla-pa/
 │   ├── project_tasks.py
 │   ├── rag_tools.py       # search_my_documents, suggest_email_body_from_context (RAG)
 │   ├── brave_tools.py     # search_web (Brave API; optional BRAVE_API_KEY)
+│   ├── image_gen_tools.py # generate_image (Pollinations.ai; free, no key)
 │   └── gmail_attachment.py
 └── scripts/
     ├── run_sql_migrations.py
     ├── init_qdrant.py      # Create Qdrant collection (idempotent)
     ├── setup_checkpointer.py  # Create Postgres checkpointer tables (conversation persistence)
+    ├── reset_data.py        # Reset Neon + Qdrant (--yes to confirm; destructive)
     ├── inspect_qdrant.py   # List collections, point count, sample memories
     ├── set_telegram_webhook.py
     ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
@@ -230,6 +235,8 @@ jayla-pa/
 | **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
 | **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `delete_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`, `delete_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
 | **RAG** (`tools_custom/rag_tools.py`) | `search_my_documents(query)` — explicit search over uploaded documents. RAG retrieval also runs each turn and injects "Document context" into the system prompt. |
+| **Brave** (`tools_custom/brave_tools.py`) | `search_web(query)` — web search (optional `BRAVE_API_KEY`). |
+| **Image gen** (`tools_custom/image_gen_tools.py`) | `generate_image(prompt)` — free image generation via Pollinations.ai (no API key); returns link to view image. |
 | **Reminders** | Calendar only. "Remind me to X at Y" → Google Calendar event (GoogleCalendar_CreateEvent). No separate reminder DB. |
 
 **Imports and packages (webhook / Railway)**
@@ -341,5 +348,7 @@ python pa_cli.py
 - **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
 - **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
 - **Conversation persistence (production):** When **`DATABASE_URL`** is set, the webhook uses a **Postgres checkpointer** (`AsyncPostgresSaver`) so conversation history (messages, tool calls, tool outputs) persists across restarts. Without `DATABASE_URL`, the app falls back to **MemorySaver** (in-memory only). Long-term "remember X" facts are read from **Qdrant** but nothing writes to it yet. See **docs/WHERE_DATA_IS_STORED.md**.
+- **Reset data:** Run `python scripts/reset_data.py --yes` to clear Neon (all tables) and Qdrant (long_term_memory). Destructive; use for dev or full wipe. Then run migrations and `init_qdrant.py` to recreate schema/collection.
+- **OCR / vision:** When the user sends a **photo** in Telegram, the webhook downloads it and uses **Groq vision** (`vision.analyze_image` with **llama-3.2-90b-vision-preview**) to describe the image; the description is injected as `[Image: ...]` in the user message so the agent can "see" it. Requires **GROQ_API_KEY** (same as chat/STT). No image generation. See **docs/AVA_VS_JAYLA_IMAGE_OCR.md**.
 - **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). **Local/CLI (full deps):** Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (bytes→text via Docling or PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). **Railway (slim image, under 4GB):** Parse uses PyPDF2/docx2txt only; embedding is not available, so ingest returns a friendly message—add documents via CLI or local for full RAG. After ingest (when embedding is available), Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
 - **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.
