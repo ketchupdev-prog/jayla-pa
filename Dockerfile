@@ -3,8 +3,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# psycopg2-binary may need libpq on some platforms
-RUN apt-get update -qq && apt-get install -y --no-install-recommends libpq5 \
+# psycopg2-binary: libpq5. docling/RAG: libgl1 for PDF rendering if needed.
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    libpq5 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Upgrade pip; install slim deps. Constrain langchain-arcade to 1.3.1 (ToolManager API).

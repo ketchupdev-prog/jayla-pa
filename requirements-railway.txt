@@ -1,6 +1,5 @@
-# Railway webhook deploy. Includes docling for RAG document ingest (PDF/DOCX).
-# Excludes sentence-transformers (torch) for faster build; RAG ingest uses docling, retrieval uses Neon.
-# httpx: Brave Search (search_web). langchain-text-splitters + PyPDF2/docx2txt: RAG fallbacks.
+# Railway webhook deploy. RAG & attachments: docling (PDF/DOCX), sentence-transformers (embeddings), fallbacks.
+# All packages below required for Telegram document upload + RAG ingest + retrieval.
 langgraph
 langchain-core
 langchain-groq
@@ -13,8 +12,10 @@ fastapi
 uvicorn
 python-telegram-bot
 httpx
-docling
-langchain-text-splitters
 psycopg2-binary
+# RAG & attachments (Telegram document upload): docling first, then split/embed/store.
+docling>=2.0,<3
+langchain-text-splitters
+sentence-transformers
 PyPDF2
 docx2txt
