@@ -46,6 +46,36 @@ def _truncate(content: str) -> str:
     return text[: MAX_CONTENT_CHARS - 20] + "\n\n...[truncated]"
 
 
+def _ensure_tool_responses(messages: list) -> list:
+    """Ensure every AIMessage with tool_calls is followed by a ToolMessage per tool_call_id.
+    If auth timed out or tools never ran, inject synthetic ToolMessages so the LLM API (Groq/OpenAI) does not return 400."""
+    out = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        out.append(m)
+        if getattr(m, "tool_calls", None):
+            ids_needed = {tc.get("id") for tc in m.tool_calls if tc.get("id")}
+            j = i + 1
+            while j < len(messages) and isinstance(messages[j], ToolMessage):
+                j += 1
+            seen_ids = {messages[k].tool_call_id for k in range(i + 1, j)}
+            for tid in ids_needed:
+                if tid not in seen_ids:
+                    out.append(
+                        ToolMessage(
+                            content="Error: Tool could not be run (authorization required or request interrupted). Please tell the user they may need to connect their calendar in a browser or try again.",
+                            tool_call_id=tid,
+                        )
+                    )
+            for k in range(i + 1, j):
+                out.append(messages[k])
+            i = j
+        else:
+            i += 1
+    return out
+
+
 def _get_model():
     if os.environ.get("DEEPSEEK_API_KEY") and ChatDeepSeek:
         return ChatDeepSeek(
@@ -116,6 +146,8 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
         )
         for m in messages
     ]
+    # Ensure every AIMessage with tool_calls has a ToolMessage per tool_call_id (Groq/OpenAI require this)
+    trimmed = _ensure_tool_responses(trimmed)
     model = _get_model()
     model_with_tools = model.bind_tools(get_tools_for_model())
     msgs = [SystemMessage(content=system_content)] + list(trimmed)
