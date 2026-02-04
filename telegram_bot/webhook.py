@@ -71,8 +71,22 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
     try:
         from langchain_core.messages import HumanMessage
         from telegram_bot.client import send_message, send_typing
+        from user_profile import load_user_profile, save_user_profile, extract_profile_from_message
+        profile = load_user_profile(chat_id)
+        config = {
+            "configurable": {
+                "thread_id": chat_id,
+                "user_id": os.environ.get("EMAIL", ""),
+                "user_name": profile.get("name", ""),
+                "user_role": profile.get("role", ""),
+                "user_company": profile.get("company", ""),
+                "key_dates": profile.get("key_dates", ""),
+                "communication_preferences": profile.get("communication_preferences", ""),
+                "current_work_context": profile.get("current_work_context", ""),
+                "onboarding_step": profile.get("onboarding_step", 0),
+            }
+        }
         graph = _get_graph()
-        config = {"configurable": {"thread_id": chat_id, "user_id": os.environ.get("EMAIL", "")}}
         inputs = {"messages": [HumanMessage(content=text)]}
         await send_typing(chat_id=chat_id)
         result = await graph.ainvoke(inputs, config=config)
@@ -87,6 +101,12 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             print(f"[webhook] Sent reply to chat_id={chat_id}", flush=True)
         else:
             print(f"[webhook] No AI reply in result for chat_id={chat_id}", flush=True)
+        # If we had no profile and the user might have introduced themselves, try to extract and save
+        if not (profile.get("name") or profile.get("role") or profile.get("company")):
+            extracted = extract_profile_from_message(text)
+            if extracted and (extracted.get("name") or extracted.get("role") or extracted.get("company")):
+                save_user_profile(chat_id, **extracted)
+                print(f"[webhook] Saved user profile for chat_id={chat_id}", flush=True)
     except Exception as e:
         import traceback
         traceback.print_exc()

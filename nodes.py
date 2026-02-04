@@ -14,8 +14,13 @@ def should_continue(state: MessagesState):
         return END
     manager = get_manager()
     for tc in last.tool_calls:
-        if manager.requires_auth(tc.get("name", "")):
-            return "authorization"
+        name = tc.get("name", "")
+        try:
+            if manager.requires_auth(name):
+                return "authorization"
+        except (ValueError, KeyError):
+            # Tool not in Arcade manager (e.g. list_projects, create_project) — no Arcade auth needed
+            continue
     return "tools"
 
 
@@ -24,8 +29,11 @@ def authorize(state: MessagesState, config: RunnableConfig):
     manager = get_manager()
     for tc in state["messages"][-1].tool_calls:
         name = tc.get("name", "")
-        if not manager.requires_auth(name):
-            continue
+        try:
+            if not manager.requires_auth(name):
+                continue
+        except (ValueError, KeyError):
+            continue  # Custom tool (e.g. list_projects) — skip Arcade auth
         auth_response = manager.authorize(name, user_id)
         if auth_response.status != "completed":
             print("\n🔐 Authorization required:", auth_response.url)

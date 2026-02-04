@@ -1,8 +1,8 @@
 # Jayla PA
 
-Personal assistant (PA) for **Jero** — MD of Ketchup Software Solutions. Jayla helps with Gmail, Google Calendar, projects/tasks (Neon), and optional Telegram. Built with LangGraph, Arcade, Groq/DeepSeek, Qdrant, and Neon.
+Personal assistant (PA) that helps with Gmail, Google Calendar, projects/tasks (Neon), and optional Telegram. User identity and preferences (name, role, company, key dates, communication preferences, current work context) are stored per thread and injected into the system prompt. Built with LangGraph, Arcade, Groq/DeepSeek, Qdrant, and Neon.
 
-See **arcade-ai-agent/PERSONAL_ASSISTANT_PATTERNS.md** for full design, patterns, and appendix.
+**Docs in this repo:** **PERSONAL_ASSISTANT_PATTERNS.md** and **PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md** (architecture, workflows, reference code). **ONBOARDING_PLAN.md** — onboarding flow (max 5 questions + document upload for RAG).
 
 ---
 
@@ -31,7 +31,7 @@ Copy `.env.example` to `.env` and fill in:
 
 - **Arcade:** `ARCADE_API_KEY`, `EMAIL`
 - **LLM:** `GROQ_API_KEY` + `GROQ_MODEL` or `DEEPSEEK_API_KEY` + `LLM_MODEL`
-- **User:** `USER_ID` (or `EMAIL`)
+- **User:** `USER_ID` (or `EMAIL`). Optional for CLI: `USER_NAME`, `USER_ROLE`, `USER_COMPANY`, `TIMEZONE`; in Telegram Jayla asks for name/role/company if not set and stores them (and onboarding: key dates, communication preferences, current work context) per chat in Neon.
 - **Neon:** `DATABASE_URL` (project management + RAG)
 - **Qdrant:** `QDRANT_URL`, `QDRANT_API_KEY` (long-term memory)
 - **Telegram (optional):** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`, `BASE_URL`
@@ -44,7 +44,7 @@ With `DATABASE_URL` set in `.env` (and venv active):
 python scripts/run_sql_migrations.py
 ```
 
-**Note:** Migrations run `0-drop-all.sql` first (drops `public` schema CASCADE), then `0-extensions.sql`, `1-projects-tasks.sql`, `2-rag-documents.sql`. All data in `public` is wiped on each run.
+**Note:** Migrations run `0-drop-all.sql` first (drops `public` schema CASCADE), then `0-extensions.sql`, `1-projects-tasks.sql`, `2-rag-documents.sql`, `3-user-profiles.sql`, `4-onboarding-fields.sql`. All data in `public` is wiped on each run. The `user_profiles` table stores name, role, company, and onboarding fields (key_dates, communication_preferences, current_work_context, onboarding_step) per thread.
 
 ### 3b. Run Qdrant init (optional, for long-term memory)
 
@@ -59,6 +59,16 @@ python scripts/init_qdrant.py
 ```bash
 ./scripts/test_env_connections.sh
 ```
+
+### 5. Test tool calls (Neon + Arcade load + graph invoke)
+
+With `DATABASE_URL` and `EMAIL` (or `USER_ID`) set, and optionally `GROQ_API_KEY` or `DEEPSEEK_API_KEY` and `ARCADE_API_KEY`:
+
+```bash
+python scripts/test_tool_calls.py
+```
+
+Runs: (1) project/task tools (list_projects, create_project, list_tasks, create_task_in_project, get_task, update_task), (2) Arcade tools load, (3) graph invoke with "list my projects".
 
 ---
 
@@ -158,11 +168,17 @@ jayla-pa/
 ├── rag.py
 ├── prompts.py
 ├── pa_cli.py
+├── user_profile.py         # Load/save profile + onboarding per thread (Neon)
+├── ONBOARDING_PLAN.md      # Onboarding flow (5 questions + doc upload)
+├── PERSONAL_ASSISTANT_PATTERNS.md
+├── PERSONAL_ASSISTANT_PATTERNS_APPENDIX.md
 ├── sql/
 │   ├── 0-drop-all.sql      # Drops public schema CASCADE (run first)
 │   ├── 0-extensions.sql
 │   ├── 1-projects-tasks.sql
-│   └── 2-rag-documents.sql
+│   ├── 2-rag-documents.sql
+│   ├── 3-user-profiles.sql # user_profiles(thread_id, name, role, company)
+│   └── 4-onboarding-fields.sql  # key_dates, communication_preferences, current_work_context, onboarding_step
 ├── telegram_bot/
 │   ├── client.py
 │   └── webhook.py
@@ -175,7 +191,40 @@ jayla-pa/
     ├── set_telegram_webhook.py
     ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
     ├── curl_deployed.sh   # Curl GET /, GET /health, POST /webhook (set BASE_URL)
-    └── test_env_connections.sh
+    ├── test_env_connections.sh
+    └── test_tool_calls.py # Test project/task tools, Arcade load, graph invoke
+```
+
+---
+
+## Tools and imports verification
+
+**Tool list (what the agent can call)**
+
+| Source | Tools |
+|--------|--------|
+| **Arcade** (Gmail, Google Calendar) | All Gmail and Calendar tools from Arcade (list/send/delete emails, list/create/update events, etc.). Require `ARCADE_API_KEY` and user auth. |
+| **Custom** (`tools_custom/project_tasks.py`) | `list_projects`, `create_project`, `list_tasks`, `create_task_in_project`, `update_task`, `get_task`. Require `DATABASE_URL` (Neon/Postgres) and migrations run. |
+
+**Imports and packages (webhook / Railway)**
+
+- `graph.py` → `agent`, `nodes`, `langgraph` (MemorySaver, StateGraph, etc.), `langgraph.prebuilt` (ToolNode)
+- `agent.py` → `tools.get_tools_for_model`, `memory`, `prompts`, `langchain_core`, `langchain_groq`, optional `langchain_deepseek`
+- `nodes.py` → `tools.get_manager`, `langchain_core`, `langgraph.graph`
+- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`
+- `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
+
+**requirements-railway.txt** must include: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `psycopg2-binary`. See also `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
+
+**Quick import check** (from repo root with venv active):
+
+```bash
+cd jayla-pa && python3 -c "
+from tools_custom.project_tasks import get_project_tools
+print('Project tools:', [t.name for t in get_project_tools()])
+from graph import build_graph
+print('Graph build: ok')
+"
 ```
 
 ---
@@ -244,6 +293,8 @@ python pa_cli.py
 ## Notes
 
 - **Startup:** The webhook app loads only FastAPI at startup; the graph and Telegram client are loaded on the first `POST /webhook`. This keeps **GET /** and **GET /health** working even if env vars for Arcade/LLM/Telegram are missing or misconfigured (only the first webhook request would fail).
+- **User profiles & onboarding:** Profile (name, role, company) and onboarding (key_dates, communication_preferences, current_work_context) are loaded per thread and **injected into the system prompt** so Jayla replies in the user’s preferred style and uses projects/deadlines/tasks/reminders. See ONBOARDING_PLAN.md.
+- **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
 - **Arcade:** Invite the user in Arcade Dashboard → Projects → Members; enable Gmail (and Calendar) for the project.
 - **Memory:** The graph does not pass a store into the agent by default; add a LangGraph Store or Qdrant for `memory_context`.
-- **RAG:** `rag.py` is a stub; implement Docling + all-mpnet-base-v2 + Neon for document ingest and retrieval.
+- **RAG:** `rag.py` is a stub; implement Docling + all-mpnet-base-v2 + Neon for document ingest and retrieval (see ONBOARDING_PLAN.md Phase 2–3).

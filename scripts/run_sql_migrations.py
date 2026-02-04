@@ -33,7 +33,7 @@ def main():
     except ImportError:
         print("Install psycopg2-binary: pip install psycopg2-binary", file=sys.stderr)
         sys.exit(1)
-    order = ["0-drop-all.sql", "0-extensions.sql", "1-projects-tasks.sql", "2-rag-documents.sql"]
+    order = ["0-drop-all.sql", "0-extensions.sql", "1-projects-tasks.sql", "2-rag-documents.sql", "3-user-profiles.sql", "4-onboarding-fields.sql"]
     for name in order:
         path = os.path.join(SQL_DIR, name)
         if not os.path.isfile(path):

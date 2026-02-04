@@ -19,12 +19,15 @@ def _get_user_id() -> str:
 def _get_conn():
     if not _HAS_PG:
         raise RuntimeError("Install psycopg2-binary for project/task tools")
-    return psycopg2.connect(os.environ["DATABASE_URL"], cursor_factory=RealDictCursor)
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set; project/task tools need a Neon (or PostgreSQL) connection.")
+    return psycopg2.connect(url, cursor_factory=RealDictCursor)
 
 
 @tool
 def list_projects() -> str:
-    """List all projects for the user. Use when asked 'what projects do I have?' or similar."""
+    """List the user's projects. Call this when the user asks: what projects do I have, list my projects, show projects, list projects."""
     user_id = _get_user_id()
     try:
         with _get_conn() as conn:
@@ -35,6 +38,11 @@ def list_projects() -> str:
                 )
                 rows = cur.fetchall()
     except Exception as e:
+        err = str(e).strip()
+        if "DATABASE_URL" in err or "not set" in err:
+            return "Projects are not available: DATABASE_URL is not configured. Set it in the environment to use project/task tools."
+        if "does not exist" in err or "relation" in err.lower():
+            return "Projects table is missing. Run SQL migrations (e.g. scripts/run_sql_migrations.py) against the database first."
         return f"Error listing projects: {e}"
     if not rows:
         return "No projects yet."

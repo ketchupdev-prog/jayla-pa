@@ -11,14 +11,22 @@ try:
 except ImportError:
     pass
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 from graph import build_graph
 
 
 async def main():
     user_id = os.environ.get("USER_ID") or os.environ.get("EMAIL", "default")
     thread_id = os.environ.get("THREAD_ID", "cli")
-    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "user_name": os.environ.get("USER_NAME", ""),
+            "user_role": os.environ.get("USER_ROLE", ""),
+            "user_company": os.environ.get("USER_COMPANY", ""),
+        }
+    }
     graph = build_graph()
     print("Jayla PA (CLI). Say 'quit' or 'exit' to stop.\n")
     while True:

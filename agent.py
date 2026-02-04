@@ -2,6 +2,9 @@
 
 import re
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import MessagesState
@@ -14,9 +17,25 @@ from langchain_groq import ChatGroq
 
 from tools import get_tools_for_model
 from memory import get_memory_namespace, get_memories
-from prompts import JAYLA_SYSTEM_PROMPT
+from prompts import JAYLA_SYSTEM_PROMPT, JAYLA_USER_CONTEXT_KNOWN, JAYLA_USER_CONTEXT_UNKNOWN
 
 MAX_CONTENT_CHARS = int(os.environ.get("PA_MAX_CONTENT_CHARS", "3500"))
+
+# Timezone for greeting (e.g. "Africa/Windhoek" for Namibia). Default UTC.
+def _get_time_of_day() -> str:
+    tz_name = os.environ.get("TIMEZONE", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    hour = datetime.now(tz).hour
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "evening"  # night -> "Good evening"
 
 
 def _truncate(content: str) -> str:
@@ -53,8 +72,38 @@ def call_agent(state: MessagesState, config: RunnableConfig, *, store=None):
         if last_user:
             memories = get_memories(store, namespace, str(last_user.content))
             memory_context = "\n".join(f"- {m}" for m in memories) if memories else ""
+    conf = config.get("configurable") or {}
+    user_name = (conf.get("user_name") or "").strip()
+    user_role = (conf.get("user_role") or "").strip()
+    user_company = (conf.get("user_company") or "").strip()
+    key_dates = (conf.get("key_dates") or "").strip()
+    communication_preferences = (conf.get("communication_preferences") or "").strip()
+    current_work_context = (conf.get("current_work_context") or "").strip()
+    if user_name or user_role or user_company:
+        role_part = f", {user_role}" if user_role else ""
+        company_part = f" at {user_company}" if user_company else ""
+        user_context = JAYLA_USER_CONTEXT_KNOWN.format(
+            user_name=user_name or "the user",
+            role_part=role_part,
+            company_part=company_part,
+        )
+    else:
+        user_context = JAYLA_USER_CONTEXT_UNKNOWN
+    # Build onboarding block for system prompt: preferences and work context (injected so Jayla follows them)
+    parts = []
+    if key_dates:
+        parts.append(f"Key dates to remember: {key_dates}")
+    if communication_preferences:
+        parts.append(f"Communication preferences: {communication_preferences}. Follow these when replying (e.g. brief vs detailed, boundaries).")
+    if current_work_context:
+        parts.append(f"Current work: projects, deadlines, tasks, reminders: {current_work_context}. Use this to prioritise and suggest follow-up.")
+    onboarding_context = "\n".join(parts) if parts else ""
     system_content = JAYLA_SYSTEM_PROMPT.format(
-        memory_context=memory_context or "(None)", current_activity=""
+        user_context=user_context,
+        time_of_day=_get_time_of_day(),
+        memory_context=memory_context or "(None)",
+        onboarding_context=onboarding_context,
+        current_activity="",
     )
     trimmed = [
         m
