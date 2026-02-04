@@ -118,9 +118,9 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 - So Jayla’s answers can cite contracts, compliance, company docs when relevant.
 
 **Scope (implemented):**  
-- **Phase 2 & 3 done.** `rag.ingest_document()` returns `(status, inserted_ids)`; Docling (with PyPDF2/docx2txt fallback) → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`. Webhook handles `message.document` → download → ingest → asks "Keep permanently or auto-remove after 7 days?" (reply **keep** or **week**) → `rag.update_documents_retention(ids, expires_at)` sets retention.  
+- **Phase 2 & 3 done.** `rag.ingest_document()` returns `(status, inserted_ids)`; bytes→text via Docling (when installed) or PyPDF2/docx2txt only → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 (when installed) → Neon `documents`. Webhook handles `message.document` → download → ingest → asks "Keep permanently or auto-remove after 7 days?" (reply **keep** or **week**) → `rag.update_documents_retention(ids, expires_at)` sets retention.  
 - `rag.retrieve()` runs each turn; top-k chunks (excluding expired) are injected as "Document context" in the system prompt. Optional tool `search_my_documents(query)` for explicit search.  
-- Railway deploy: Docling/sentence-transformers are heavy; use `requirements-railway.txt` (slim, no RAG) or run ingest locally/in a worker.
+- **Railway (image under 4GB):** `requirements-railway.txt` omits docling and sentence-transformers. Document parse on Railway uses PyPDF2/docx2txt only; ingest returns a friendly message that embedding isn't available—add documents via CLI or local run for full RAG.
 
 ---
 
@@ -129,7 +129,7 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 | Phase | What | Deliverables |
 |-------|------|--------------|
 | **Phase 1** | Onboarding schema + 5 questions | Migration `4-onboarding-fields.sql`; extend `user_profiles`; `user_profile.load/save` for new fields; prompts + agent logic (or tool `save_onboarding_answer`) so Jayla asks Q1–Q5 in order and marks complete. |
-| **Phase 2** ✅ | Document upload + ingest | **Done.** Webhook: handle `message.document`; download file; call `rag.ingest_document(bytes_content, user_id, metadata)`. Implemented: Docling/PyPDF2/docx2txt → chunk → all-mpnet-base-v2 → Neon `documents`. |
+| **Phase 2** ✅ | Document upload + ingest | **Done.** Webhook: handle `message.document`; download file; call `rag.ingest_document(bytes_content, user_id, metadata)`. Local: Docling or PyPDF2/docx2txt → chunk → all-mpnet-base-v2 → Neon. Railway (slim): PyPDF2/docx2txt parse only; ingest returns message that embedding isn't available. |
 | **Phase 3** ✅ | RAG retrieval in agent | **Done.** `rag.retrieve()` in `call_agent()`; top-k chunks as Document context in system prompt; tool `search_my_documents(query)` in `tools_custom/rag_tools.py`. |
 | **Phase 4** (optional) | Onboarding UX polish | “Skip” / “Later” for each question; optional reminder to upload docs after onboarding; list of doc types (legal, compliance, company) in Q5. |
 
@@ -141,7 +141,7 @@ Migration: `4-onboarding-fields.sql` (ALTER TABLE user_profiles ADD COLUMN …).
 - **System prompt injection:** All onboarding fields (communication preference, key dates, current work context) are loaded from profile, combined into an “User preferences and context” block, and **injected into the system prompt** so Jayla replies in the right style and with the right context.  
 - **Storage:** Extend `user_profiles` with onboarding fields and step.  
 - **Flow:** Conversational (one question at a time); agent-driven with optional tool `save_onboarding_answer`.  
-- **Documents:** Upload in Telegram → parse (Docling) → chunk → embed → `documents` table; RAG retrieve in agent to power answers with legal/compliance/company content.  
+- **Documents:** Upload in Telegram → parse (Docling when installed, else PyPDF2/docx2txt) → chunk → embed (when sentence-transformers available) → `documents` table; RAG retrieve in agent to power answers with legal/compliance/company content. Railway slim image: parse only; add docs via CLI/local for full RAG.  
 - **Phases:** 1 = onboarding questions + schema + prompt injection; 2 = document ingest; 3 = RAG in agent; 4 = UX polish.
 
 **Phases 2–3 (RAG):** Implemented. Next: **Phase 1** (onboarding flow with tool/question order) or **Phase 4** (UX polish).

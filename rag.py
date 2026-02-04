@@ -16,7 +16,7 @@ EMBEDDING_DIM = 768
 
 
 def _get_embedder():
-    """Lazy-load SentenceTransformer (heavy)."""
+    """Lazy-load SentenceTransformer (heavy). Raises ImportError when not installed (e.g. Railway slim image)."""
     from sentence_transformers import SentenceTransformer
     return SentenceTransformer("all-mpnet-base-v2")
 
@@ -31,7 +31,7 @@ def _get_conn():
 
 
 def _bytes_to_text(bytes_content: bytes, filename: str = "") -> str:
-    """Parse PDF/DOCX bytes to plain text. Uses Docling; fallback PyPDF2/docx2txt if needed."""
+    """Parse PDF/DOCX bytes to plain text. Uses Docling when available; else PyPDF2/docx2txt (Railway slim image)."""
     suffix = (filename or "").lower()
     if suffix.endswith(".pdf"):
         ext = ".pdf"
@@ -39,6 +39,7 @@ def _bytes_to_text(bytes_content: bytes, filename: str = "") -> str:
         ext = ".docx"
     else:
         ext = ".pdf"  # try PDF first for unknown
+    # Try Docling first when installed (local/full image)
     try:
         from docling.document_converter import DocumentConverter
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
@@ -54,36 +55,37 @@ def _bytes_to_text(bytes_content: bytes, filename: str = "") -> str:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    except Exception as docling_err:
-        # Optional lightweight fallback when Docling fails (e.g. some PDFs); requires pypdf2 / docx2txt
-        if ext == ".pdf":
+    except ImportError:
+        # Docling not installed (e.g. Railway slim image); use lightweight fallbacks only
+        pass
+    except Exception:
+        # Docling failed on this file; fall through to fallbacks
+        pass
+    # Lightweight fallback: PyPDF2 / docx2txt (always in requirements-railway.txt)
+    if ext == ".pdf":
+        try:
+            import io
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(bytes_content))
+            return "\n".join(p.extract_text() or "" for p in reader.pages).strip()
+        except Exception:
+            raise
+    if ext == ".docx" or ".doc" in suffix:
+        try:
+            import docx2txt
+            with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+                tmp.write(bytes_content)
+                tmp_path = tmp.name
             try:
-                import PyPDF2
-                import io
-                reader = PyPDF2.PdfReader(io.BytesIO(bytes_content))
-                return "\n".join(p.extract_text() or "" for p in reader.pages).strip()
-            except ImportError:
-                raise docling_err
-            except Exception:
-                raise docling_err
-        if ext == ".docx" or ".doc" in suffix:
-            try:
-                import docx2txt
-                with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
-                    tmp.write(bytes_content)
-                    tmp_path = tmp.name
+                return (docx2txt.process(tmp_path) or "").strip()
+            finally:
                 try:
-                    return (docx2txt.process(tmp_path) or "").strip()
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-            except ImportError:
-                raise docling_err
-            except Exception:
-                raise docling_err
-        raise docling_err
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        except Exception:
+            raise
+    raise ValueError(f"Unsupported file type for parsing: {filename or ext}")
 
 
 def ingest_document(
@@ -124,7 +126,14 @@ def ingest_document(
     )
     chunks = splitter.split_text(text)
 
-    model = _get_embedder()
+    try:
+        model = _get_embedder()
+    except ImportError:
+        return (
+            "Document embedding isn't available on this server (image size limit). "
+            "Add documents using the CLI or a local deployment with sentence-transformers.",
+            [],
+        )
     embeddings = model.encode(chunks, show_progress_bar=False).tolist()
 
     meta_json = json.dumps({

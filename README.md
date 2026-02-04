@@ -168,8 +168,8 @@ jayla-pa/
 ├── railway.toml       # Railway start command (Config as Code)
 ├── Dockerfile        # Railway: pip install requirements-railway.txt (slim build)
 ├── .dockerignore     # Exclude .env, venvs, .git from image
-├── requirements.txt  # Full deps (local dev, RAG)
-├── requirements-railway.txt  # Slim deps for deploy (no torch/docling)
+├── requirements.txt  # Full deps (local dev, RAG: docling + sentence-transformers)
+├── requirements-railway.txt  # Slim deps for deploy (<4GB image; no torch/docling/sentence-transformers)
 ├── langgraph.json
 ├── configuration.py
 ├── graph.py
@@ -177,7 +177,7 @@ jayla-pa/
 ├── agent.py
 ├── tools.py
 ├── memory.py
-├── rag.py                  # Ingest (Docling/PyPDF2/docx2txt → chunk → embed → Neon) + retrieve
+├── rag.py                  # Ingest: bytes→text (Docling or PyPDF2/docx2txt) → split → embed (when available) → Neon; retrieve
 ├── prompts.py
 ├── pa_cli.py
 ├── speech_to_text.py       # STT (Groq Whisper) for voice messages
@@ -239,7 +239,7 @@ jayla-pa/
 - `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
 - `tools_custom/rag_tools.py` → `rag.retrieve`, `langchain_core.tools.tool`
 
-**requirements-railway.txt** must include: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `psycopg2-binary`. See also `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
+**requirements-railway.txt** keeps the image under 4GB: no docling, no sentence-transformers (no torch). Document parse on Railway uses PyPDF2 + docx2txt only; ingest returns a friendly message that embedding isn't available (add docs via CLI or local). Includes: `langgraph`, `langchain-core`, `langchain-groq`, `langchain-deepseek`, `langchain-arcade==1.3.1`, `langchain-community`, `qdrant-client`, `python-dotenv`, `fastapi`, `uvicorn`, `python-telegram-bot`, `httpx`, `psycopg2-binary`, `langchain-text-splitters`, `PyPDF2`, `docx2txt`. See `constraints-railway.txt` (pins `langchain-arcade==1.3.1`).
 
 **Quick import check** (from repo root with venv active):
 
@@ -279,7 +279,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 
 **Recommended: Railway or Render**
 
-1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars (see below). The repo includes **`railway.toml`** and a **`Dockerfile`** (Railway uses it when present). The Dockerfile installs **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) for a fast build; the app starts with only FastAPI so **GET /** and **GET /health** work at once (graph loads on first webhook). Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works.  
+1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars (see below). The repo includes **`railway.toml`** and a **`Dockerfile`** (Railway uses it when present). The Dockerfile installs **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) so the image stays **under 4GB** (Railway limit). Document upload in Telegram works (parse via PyPDF2/docx2txt) but ingest returns a message that embedding isn't available on this server—add documents via CLI or local run for full RAG. The app starts with only FastAPI so **GET /** and **GET /health** work at once (graph loads on first webhook). Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works.  
    - **Sync env from local .env:** With [Railway CLI](https://docs.railway.app/develop/cli) installed and linked (`railway login`, `railway link`), run `./scripts/set_railway_vars.sh` from `jayla-pa` to set all variables from `.env` (skips `RAILWAY_TOKEN`). Then redeploy (`railway up` or push a commit).  
    - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed) for `railway up`. View deploy/runtime logs: `railway logs` (from jayla-pa with project linked).
 2. **Render** – [render.com](https://render.com): New → Web Service → Connect repo (jayla-pa) → Build: `pip install -r requirements.txt` (or use Dockerfile) → Start: `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` → Add env vars. Render gives you `https://yourapp.onrender.com`. In Namecheap, **CNAME** Host `jayla`, Value `yourapp.onrender.com`. Set `BASE_URL=https://jayla.ketchup.cc` and add `jayla.ketchup.cc` as custom domain in Render.
@@ -336,5 +336,5 @@ python pa_cli.py
 - **Custom tools (project/task):** Arcade’s manager only knows Gmail/Calendar tools; `nodes.should_continue` and `authorize` skip auth for custom tools (e.g. list_projects) so the graph runs them via the prebuilt ToolNode.
 - **Arcade (Gmail / Calendar):** Google Calendar authorization is the same as Gmail: **authorize first, then continue.** Both use Arcade’s `manager.authorize(tool_name, user_id)`; one flow for all Arcade tools. User must open the auth link (Google OAuth), complete it, then ask again. Invite the user in Arcade Dashboard → Projects → Members; enable Gmail and Calendar for the project. For Telegram (and other webhooks), set `PA_AUTH_NONBLOCK=1` so the bot sends the auth link in the reply instead of blocking; user authorizes, then asks again and tools run.
 - **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
-- **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (Docling/PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). After ingest, Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
+- **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). **Local/CLI (full deps):** Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (bytes→text via Docling or PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). **Railway (slim image, under 4GB):** Parse uses PyPDF2/docx2txt only; embedding is not available, so ingest returns a friendly message—add documents via CLI or local for full RAG. After ingest (when embedding is available), Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
 - **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.

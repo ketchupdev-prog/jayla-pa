@@ -1,5 +1,5 @@
-# Railway webhook deploy. RAG & attachments: docling (PDF/DOCX), sentence-transformers (embeddings), fallbacks.
-# All packages below required for Telegram document upload + RAG ingest + retrieval.
+# Railway webhook deploy. Image must stay under 4GB; no torch/docling/sentence-transformers.
+# Document parse: PyPDF2 + docx2txt only. Embedding: not available on Railway (ingest returns friendly message).
 langgraph
 langchain-core
 langchain-groq
@@ -13,9 +13,6 @@ uvicorn
 python-telegram-bot
 httpx
 psycopg2-binary
-# RAG & attachments (Telegram document upload): docling first, then split/embed/store.
-docling>=2.0,<3
 langchain-text-splitters
-sentence-transformers
 PyPDF2
 docx2txt

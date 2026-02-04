@@ -581,7 +581,7 @@ PyPDF2
 docx2txt
 ```
 
-*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile. RAG fallbacks: PyPDF2, docx2txt when Docling fails.)*
+*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile. Image must stay under 4GB: no docling, no sentence-transformers. Document parse on Railway uses PyPDF2 + docx2txt only; ingest returns a message that embedding isn't available—add documents via CLI or local for full RAG.)*
 
 ### C.17 langgraph.json
 
