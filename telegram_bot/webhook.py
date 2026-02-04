@@ -244,6 +244,23 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             del _pending_retention[chat_id]
             await send_message("Done. Document will auto-remove after 7 days.", chat_id=chat_id)
             return {"ok": True}
+    # "Can you see images?" shortcut: reply directly so we never say "no" (no LLM needed)
+    _see_lower = text.strip().lower()
+    if "[image:" not in _see_lower and (
+        "can you see image" in _see_lower or "do you see image" in _see_lower or "can you see photo" in _see_lower
+        or "do you see photo" in _see_lower or "can you process image" in _see_lower or "see images i send" in _see_lower
+    ):
+        try:
+            from telegram_bot.client import send_message
+            await send_message(
+                "Yes. When you send a photo, I get a description of it and can tell you what's in it or answer questions. "
+                "Try sending a photo with a caption like \"What's in this picture?\"",
+                chat_id=chat_id,
+            )
+            print(f"[webhook] 'Can you see images?' shortcut for chat_id={chat_id}", flush=True)
+            return {"ok": True}
+        except Exception:
+            pass
     # Image-generation shortcut: if user clearly asks for an image, generate it here and reply with link (no LLM needed)
     _img_lower = text.strip().lower()
     _is_image_request = (
