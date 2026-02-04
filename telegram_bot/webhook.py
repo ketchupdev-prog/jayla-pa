@@ -45,32 +45,55 @@ async def health():
 
 
 @app.post("/webhook")
-async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None)):
-    if os.environ.get("TELEGRAM_WEBHOOK_SECRET") and x_telegram_bot_api_secret_token != os.environ.get("TELEGRAM_WEBHOOK_SECRET"):
+async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")):
+    # Reject only if we set a secret AND Telegram sent a different one (allow missing header for backward compat)
+    secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+    if secret and x_telegram_bot_api_secret_token is not None and x_telegram_bot_api_secret_token != secret:
         return {"ok": False}
-    body = await request.json()
-    message = body.get("message", {})
-    chat_id = str(message.get("chat", {}).get("id"))
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": True}
+    # Support message or edited_message
+    message = body.get("message") or body.get("edited_message") or {}
+    chat = message.get("chat") or {}
+    chat_id = str(chat.get("id") or "")
     # If message.document: download → RAG ingest (§8.5a) → send "Added …" and return
     # If message.voice: STT → use transcript as text. If message.photo: VLM → "[Image: …]"
-    text = message.get("text", "").strip()
+    text = (message.get("text") or "").strip()
     if not text:
         return {"ok": True}
-    if os.environ.get("TELEGRAM_CHAT_ID") and chat_id != os.environ["TELEGRAM_CHAT_ID"]:
+    allowed_chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if allowed_chat and chat_id != allowed_chat:
+        print(f"[webhook] Skipping: chat_id {chat_id} != TELEGRAM_CHAT_ID {allowed_chat}", flush=True)
         return {"ok": True}
-    from langchain_core.messages import HumanMessage
-    from telegram_bot.client import send_message, send_typing
-    graph = _get_graph()
-    config = {"configurable": {"thread_id": chat_id, "user_id": os.environ.get("EMAIL", "")}}
-    inputs = {"messages": [HumanMessage(content=text)]}
-    await send_typing(chat_id=chat_id)
-    result = await graph.ainvoke(inputs, config=config)
-    messages = result.get("messages", [])
-    reply = ""
-    for m in reversed(messages):
-        if hasattr(m, "content") and m.content and getattr(m, "type", None) == "ai":
-            reply = m.content if isinstance(m.content, str) else str(m.content)
-            break
-    if reply:
-        await send_message(reply, chat_id=chat_id)
+    print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
+    try:
+        from langchain_core.messages import HumanMessage
+        from telegram_bot.client import send_message, send_typing
+        graph = _get_graph()
+        config = {"configurable": {"thread_id": chat_id, "user_id": os.environ.get("EMAIL", "")}}
+        inputs = {"messages": [HumanMessage(content=text)]}
+        await send_typing(chat_id=chat_id)
+        result = await graph.ainvoke(inputs, config=config)
+        messages = result.get("messages", [])
+        reply = ""
+        for m in reversed(messages):
+            if hasattr(m, "content") and m.content and getattr(m, "type", None) == "ai":
+                reply = m.content if isinstance(m.content, str) else str(m.content)
+                break
+        if reply:
+            await send_message(reply, chat_id=chat_id)
+            print(f"[webhook] Sent reply to chat_id={chat_id}", flush=True)
+        else:
+            print(f"[webhook] No AI reply in result for chat_id={chat_id}", flush=True)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            from telegram_bot.client import send_message
+            await send_message(f"Sorry, something went wrong: {str(e)[:200]}", chat_id=chat_id)
+            print(f"[webhook] Sent error message to chat_id={chat_id}", flush=True)
+        except Exception as e2:
+            print(f"[webhook] Failed to send error to user: {e2}", flush=True)
     return {"ok": True}

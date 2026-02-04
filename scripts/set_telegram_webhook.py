@@ -31,12 +31,21 @@ def main():
         print("BASE_URL not set (e.g. https://your-domain.com).", file=sys.stderr)
         sys.exit(1)
     webhook_url = f"{url}/webhook"
+    import re
     import urllib.request
     import urllib.error
     import json
+    # Telegram allows only [a-zA-Z0-9_-] in secret_token (no URL, colons, slashes)
+    secret_ok = secret and re.match(r"^[A-Za-z0-9_-]{1,256}$", secret)
+    payload = {"url": webhook_url}
+    if secret_ok:
+        payload["secret_token"] = secret
+        print("Using TELEGRAM_WEBHOOK_SECRET (Telegram will send it in X-Telegram-Bot-Api-Secret-Token)")
+    elif secret:
+        print("Warning: TELEGRAM_WEBHOOK_SECRET contains disallowed characters (use only letters, numbers, hyphen, underscore). Webhook set without secret.", file=sys.stderr)
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/setWebhook",
-        data=json.dumps({"url": webhook_url}).encode("utf-8"),
+        data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
