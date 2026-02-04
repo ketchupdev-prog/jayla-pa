@@ -8,6 +8,9 @@ from contextlib import asynccontextmanager
 # Load .env from project root so ARCADE_API_KEY etc. are set before graph/tools import
 _webhook_dir = os.path.dirname(os.path.abspath(__file__))
 _pa_root = os.path.dirname(_webhook_dir)
+# Ensure jayla-pa root is on path so "vision", "graph", "agent" etc. resolve from any cwd (CLI, uvicorn, Docker)
+if _pa_root not in __import__("sys").path:
+    __import__("sys").path.insert(0, _pa_root)
 _env_path = os.path.join(_pa_root, ".env")
 if os.path.isfile(_env_path):
     try:
@@ -189,6 +192,7 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             largest = photos[-1]
             file_id = largest.get("file_id")
             if file_id:
+                caption = (message.get("caption") or "").strip()
                 try:
                     from telegram_bot.client import get_bot
                     from vision import analyze_image
@@ -203,7 +207,6 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
                             os.unlink(tmp.name)
                         except OSError:
                             pass
-                    caption = (message.get("caption") or "").strip()
                     description = await analyze_image(
                         image_bytes,
                         "Describe what you see in this image in one or two short sentences for a personal assistant.",
@@ -214,12 +217,8 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
                     import traceback
                     traceback.print_exc()
                     print(f"[webhook] Vision failed for chat_id={chat_id}: {v_err}", flush=True)
-                    try:
-                        from telegram_bot.client import send_message
-                        await send_message("I couldn't analyze that image. Please try again or send a caption.", chat_id=chat_id)
-                    except Exception:
-                        pass
-                    return {"ok": True}
+                    # Still respond: inject placeholder so the agent can reply (e.g. "I got your image but couldn't analyze it")
+                    text = f"{caption}\n[Image: (user sent an image; description unavailable—you can describe it if you'd like)]".strip() if caption else "[Image: (user sent an image; description unavailable—you can describe it if you'd like)]"
     if not text:
         return {"ok": True}
     allowed_chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()

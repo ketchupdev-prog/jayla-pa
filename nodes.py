@@ -17,14 +17,19 @@ def should_continue(state):
     last = state["messages"][-1]
     if not getattr(last, "tool_calls", None):
         return END
-    manager = get_manager()
+    try:
+        manager = get_manager()
+    except Exception:
+        manager = None  # No Arcade (e.g. ARCADE_API_KEY unset) — all tools (e.g. generate_image) go to tools
     for tc in last.tool_calls:
         name = tc.get("name", "")
+        if manager is None:
+            continue
         try:
             if manager.requires_auth(name):
                 return "authorization"
         except (ValueError, KeyError):
-            # Tool not in Arcade manager (e.g. list_projects, create_project) — no Arcade auth needed
+            # Tool not in Arcade manager (e.g. list_projects, generate_image) — no Arcade auth needed
             continue
     return "tools"
 
@@ -32,7 +37,12 @@ def should_continue(state):
 def authorize(state, config: RunnableConfig):
     """Arcade auth (same for Gmail and Google Calendar): authorize first, then continue. Uses manager.authorize(tool_name, user_id). If not completed, show URL and either block (CLI) or return link in ToolMessages (webhook)."""
     user_id = config.get("configurable", {}).get("user_id") or os.environ.get("EMAIL", "")
-    manager = get_manager()
+    try:
+        manager = get_manager()
+    except Exception:
+        manager = None
+    if manager is None:
+        return {"messages": []}
     last = state["messages"][-1]
     tool_calls = getattr(last, "tool_calls", None) or []
     auth_url = None

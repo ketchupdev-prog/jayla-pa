@@ -135,6 +135,21 @@ def test_arcade_tools_load():
         return "FAIL", str(e)
 
 
+def test_image_gen_tool():
+    """Test generate_image tool directly (Pollinations.ai; no Arcade/API key needed). Ensures tool returns a URL."""
+    try:
+        from tools_custom.image_gen_tools import generate_image
+        out = generate_image.invoke({"prompt": "a ramen bowl"})
+        if not out or not isinstance(out, str):
+            return "FAIL", "generate_image returned empty or non-string"
+        if "pollinations" not in out and "http" not in out.lower():
+            return "FAIL", f"generate_image did not return a URL: {out[:120]}"
+        logger.info("generate_image -> %s", out[:80])
+        return "OK", out[:120]
+    except Exception as e:
+        return "FAIL", str(e)
+
+
 async def _run_graph_with_events(input_text: str, config: dict, log_events: bool = True):
     """Run graph with astream_events; log state, streaming, tool invocations; return final state."""
     from langchain_core.messages import HumanMessage
@@ -559,9 +574,22 @@ def main():
         if status == "OK":
             calendar_tools = [n for n in data if "Calendar" in n or "calendar" in n]
             print(f"  OK ({len(data)} tools). Calendar (reminders=events): {calendar_tools or 'NONE'}")
+            if "generate_image" not in (data if isinstance(data, list) else []):
+                print("  WARN: generate_image not in tool list")
+            else:
+                print("  generate_image: present")
             print(f"  All tool names: {sorted(data)}")
         else:
             print(f"  FAIL: {data}")
+    except Exception as e:
+        print(f"  FAIL: {e}")
+    print()
+
+    # 2b. Image generation tool (Pollinations; no Arcade needed)
+    print("[2b] Image generation tool (generate_image)...")
+    try:
+        status, msg = test_image_gen_tool()
+        print(f"  {status}: {msg}")
     except Exception as e:
         print(f"  FAIL: {e}")
     print()
@@ -652,6 +680,7 @@ def main():
         tool_prompts = [
             ("list_projects", "List my projects."),
             ("list_tasks", "List my tasks."),
+            ("generate_image", "Generate an image of a ramen bowl. Share the link."),
             ("GoogleCalendar_ListCalendars", "List my calendars."),
             ("GoogleCalendar_ListEvents", f"Today is {today}. List my calendar events for today."),
             ("Gmail_ListThreads", "List my 3 most recent email threads."),
