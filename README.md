@@ -132,7 +132,9 @@ jayla-pa/
 ├── README.md
 ├── pyproject.toml
 ├── railway.toml       # Railway start command (Config as Code)
-├── requirements.txt
+├── nixpacks.toml      # Railway: use requirements-railway.txt (slim build)
+├── requirements.txt   # Full deps (local dev, RAG); Railway uses requirements-railway.txt
+├── requirements-railway.txt  # Slim deps for deploy (no torch/docling)
 ├── langgraph.json
 ├── configuration.py
 ├── graph.py
@@ -176,7 +178,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 
 **Recommended: Railway or Render**
 
-1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars in the dashboard (same keys as `.env`; never commit secrets). The repo includes **`railway.toml`** so the start command is `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT`. Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works for that hostname.  
+1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars in the dashboard (same keys as `.env`; never commit secrets). The repo includes **`railway.toml`** so the start command is `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT`. **`nixpacks.toml`** makes the build use **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) to avoid build timeout; the webhook runs without RAG/embedding libs. Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works for that hostname.  
    - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed). Install [Railway CLI](https://docs.railway.app/develop/cli) and run `railway login` (or `railway link` with token) to link and deploy from the terminal.
 2. **Render** – [render.com](https://render.com): New → Web Service → Connect repo (jayla-pa) → Build: `pip install -r requirements.txt` (or use Dockerfile) → Start: `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` → Add env vars. Render gives you `https://yourapp.onrender.com`. In Namecheap, **CNAME** Host `jayla`, Value `yourapp.onrender.com`. Set `BASE_URL=https://jayla.ketchup.cc` and add `jayla.ketchup.cc` as custom domain in Render.
 
