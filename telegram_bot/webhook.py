@@ -20,13 +20,18 @@ if os.path.isfile(_env_path):
                     os.environ.setdefault(k, v)
 
 from fastapi import FastAPI, Request, Header
-from langchain_core.messages import HumanMessage
-from graph import build_graph
-from telegram_bot.client import send_message, send_typing
-
-graph = build_graph()
 
 app = FastAPI()
+
+_graph = None
+
+
+def _get_graph():
+    global _graph
+    if _graph is None:
+        from graph import build_graph
+        _graph = build_graph()
+    return _graph
 
 
 @app.get("/")
@@ -53,6 +58,9 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         return {"ok": True}
     if os.environ.get("TELEGRAM_CHAT_ID") and chat_id != os.environ["TELEGRAM_CHAT_ID"]:
         return {"ok": True}
+    from langchain_core.messages import HumanMessage
+    from telegram_bot.client import send_message, send_typing
+    graph = _get_graph()
     config = {"configurable": {"thread_id": chat_id, "user_id": os.environ.get("EMAIL", "")}}
     inputs = {"messages": [HumanMessage(content=text)]}
     await send_typing(chat_id=chat_id)
