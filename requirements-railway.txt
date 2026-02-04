@@ -1,6 +1,6 @@
-# Slim deps for Railway webhook deploy. Excludes sentence-transformers/docling (torch) to avoid build timeout.
-# Full stack (RAG, local embeddings): use requirements.txt and run locally.
-# httpx: required for Brave Search (search_web tool).
+# Railway webhook deploy. Includes docling for RAG document ingest (PDF/DOCX).
+# Excludes sentence-transformers (torch) for faster build; RAG ingest uses docling, retrieval uses Neon.
+# httpx: Brave Search (search_web). langchain-text-splitters + PyPDF2/docx2txt: RAG fallbacks.
 langgraph
 langchain-core
 langchain-groq
@@ -13,4 +13,8 @@ fastapi
 uvicorn
 python-telegram-bot
 httpx
+docling
+langchain-text-splitters
 psycopg2-binary
+PyPDF2
+docx2txt

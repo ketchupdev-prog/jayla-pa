@@ -1,4 +1,4 @@
-# Railway: use slim deps (requirements-railway.txt) for fast build. No torch/docling.
+# Railway: requirements-railway.txt includes docling for RAG ingest; no sentence-transformers (torch).
 FROM python:3.12-slim
 
 WORKDIR /app
