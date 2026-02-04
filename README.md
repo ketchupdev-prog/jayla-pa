@@ -287,7 +287,7 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 **Requirements for any host**
 
 - **Start command:** `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` (use `$PORT` or the platform’s env).
-- **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway. For web search in Telegram, set **`BRAVE_API_KEY`** on Railway (same script syncs it from `.env`).
+- **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway. **Web search in Telegram:** You must set **`BRAVE_API_KEY`** on Railway (Variables in the dashboard, or in `.env` before running `set_railway_vars.sh`). Without it, the agent will not have the `search_web` tool and will say it doesn’t have web search—queries like “find out about X” or “search the internet” will not work until the key is set and the app is redeployed.
 - After deploy, run migrations and Qdrant init once (locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
 
 **Reminders** – Reminders are Google Calendar events only. Jayla uses GoogleCalendar_CreateEvent for "remind me to X at Y"; no separate reminder DB or cron.
