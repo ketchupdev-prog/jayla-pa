@@ -29,6 +29,16 @@ graph = build_graph()
 app = FastAPI()
 
 
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "jayla-pa", "webhook": "/webhook"}
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "status": "healthy"}
+
+
 @app.post("/webhook")
 async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None)):
     if os.environ.get("TELEGRAM_WEBHOOK_SECRET") and x_telegram_bot_api_secret_token != os.environ.get("TELEGRAM_WEBHOOK_SECRET"):

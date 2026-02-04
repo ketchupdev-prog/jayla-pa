@@ -18,6 +18,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     val="${val%\"}"
     [[ -z "$key" ]] && continue
     [[ -z "$val" ]] && continue
+    # Skip CLI-only tokens (not needed by the running app)
+    [[ "$key" == "RAILWAY_TOKEN" ]] && continue
     printf '%s' "$val" | railway variable set "$key" --stdin --skip-deploys
   fi
 done < .env
