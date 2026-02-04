@@ -62,6 +62,14 @@ python scripts/init_qdrant.py
 
 ## Running
 
+### HTTP endpoints (webhook server)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Service info: `{"ok": true, "service": "jayla-pa", "webhook": "/webhook"}` |
+| GET | `/health` | Health check: `{"ok": true, "status": "healthy"}` |
+| POST | `/webhook` | Telegram webhook (JSON body from Telegram) |
+
 ### CLI
 
 ```bash
@@ -75,6 +83,8 @@ First use of Gmail or Calendar will prompt for Arcade OAuth in the terminal.
 ```bash
 uvicorn telegram_bot.webhook:app --reload --host 0.0.0.0 --port 8000
 ```
+
+The app starts with only FastAPI loaded; the graph and Telegram client are loaded on the first `POST /webhook` request, so **GET /** and **GET /health** respond immediately (useful for health checks and avoiding 502 on Railway).
 
 Then set the webhook. **BASE_URL** in `.env` must be the public URL where the webhook is reachable (no trailing slash):
 
@@ -133,6 +143,7 @@ jayla-pa/
 ├── pyproject.toml
 ├── railway.toml       # Railway start command (Config as Code)
 ├── Dockerfile        # Railway: pip install requirements-railway.txt (slim build)
+├── .dockerignore     # Exclude .env, venvs, .git from image
 ├── requirements.txt  # Full deps (local dev, RAG)
 ├── requirements-railway.txt  # Slim deps for deploy (no torch/docling)
 ├── langgraph.json
@@ -160,6 +171,8 @@ jayla-pa/
     ├── run_sql_migrations.py
     ├── init_qdrant.py      # Create Qdrant collection (idempotent)
     ├── set_telegram_webhook.py
+    ├── set_railway_vars.sh # Sync .env to Railway (skips RAILWAY_TOKEN)
+    ├── curl_deployed.sh   # Curl GET /, GET /health, POST /webhook (set BASE_URL)
     └── test_env_connections.sh
 ```
 
@@ -178,15 +191,30 @@ For the **Telegram webhook** you need a long-running HTTPS endpoint. Recommended
 
 **Recommended: Railway or Render**
 
-1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars in the dashboard (same keys as `.env`; never commit secrets). The repo includes **`railway.toml`** for the start command and a **`Dockerfile`** (Railway uses it when present). The Dockerfile installs **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) for a fast, reliable build; the webhook runs without RAG/embedding libs. Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works for that hostname.  
-   - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed). Install [Railway CLI](https://docs.railway.app/develop/cli) and run `railway login` (or `railway link` with token) to link and deploy from the terminal.
+1. **Railway** – [railway.app](https://railway.app): New Project → Deploy from GitHub (connect `ketchupdev-prog/jayla-pa`) → Add env vars (see below). The repo includes **`railway.toml`** and a **`Dockerfile`** (Railway uses it when present). The Dockerfile installs **`requirements-railway.txt`** (slim deps: no torch/docling/sentence-transformers) for a fast build; the app starts with only FastAPI so **GET /** and **GET /health** work at once (graph loads on first webhook). Generate a domain in Settings → Networking, then in Namecheap add **CNAME** Host `jayla`, Value `yourapp.up.railway.app`. In Railway, add custom domain **`jayla.ketchup.cc`** so HTTPS works.  
+   - **Sync env from local .env:** With [Railway CLI](https://docs.railway.app/develop/cli) installed and linked (`railway login`, `railway link`), run `./scripts/set_railway_vars.sh` from `jayla-pa` to set all variables from `.env` (skips `RAILWAY_TOKEN`). Then redeploy (`railway up` or push a commit).  
+   - **CLI (optional):** Put `RAILWAY_TOKEN=...` in local `.env` (not committed) for `railway up` / `railway logs`.
 2. **Render** – [render.com](https://render.com): New → Web Service → Connect repo (jayla-pa) → Build: `pip install -r requirements.txt` (or use Dockerfile) → Start: `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` → Add env vars. Render gives you `https://yourapp.onrender.com`. In Namecheap, **CNAME** Host `jayla`, Value `yourapp.onrender.com`. Set `BASE_URL=https://jayla.ketchup.cc` and add `jayla.ketchup.cc` as custom domain in Render.
 
 **Requirements for any host**
 
-- **Start command:** `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` (use `$PORT` or the platform’s env, e.g. Render uses `PORT`).
-- **Env vars:** Copy from `.env` (e.g. `ARCADE_API_KEY`, `DATABASE_URL`, `QDRANT_URL`, `QDRANT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `BASE_URL=https://jayla.ketchup.cc`, etc.). Never commit `.env`; set them in the platform’s dashboard.
-- After deploy, run migrations and Qdrant init once (e.g. locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job on the platform). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
+- **Start command:** `uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT` (use `$PORT` or the platform’s env).
+- **Env vars:** Copy from `.env` (see `.env.example` for keys). Never commit `.env`; set them in the platform’s dashboard or use `./scripts/set_railway_vars.sh` for Railway.
+- After deploy, run migrations and Qdrant init once (locally with same `DATABASE_URL` and `QDRANT_*`, or via a one-off job). Then run `python scripts/set_telegram_webhook.py` locally with `BASE_URL=https://jayla.ketchup.cc` so Telegram uses the deployed URL.
+
+**Verify deployed app**
+
+- **GET /** and **GET /health** return `{"ok": true, ...}` when the app is up.
+- From the repo: `BASE_URL=https://jayla.ketchup.cc ./scripts/curl_deployed.sh` (or use your Railway-generated URL). Or run: `curl -s https://jayla.ketchup.cc/` and `curl -s https://jayla.ketchup.cc/health`.
+
+**Troubleshooting 502 "Application failed to respond" (Railway)**
+
+Railway returns 502 when its edge proxy cannot reach your app. Per [Railway’s docs](https://docs.railway.com/reference/errors/application-failed-to-respond):
+
+1. **App must listen on `0.0.0.0` and the `PORT` env var** – The Dockerfile already uses `uvicorn ... --host 0.0.0.0 --port ${PORT:-8000}`. Do not set a custom `PORT` in Railway variables unless you need a fixed port; leave it unset so Railway injects it.
+2. **Target port** – In Railway → your service → **Settings** → **Networking** → **Public Networking**, ensure the domain’s **target port** matches the port your app listens on (or leave it unset so Railway auto-detects).
+3. **Check deployment logs** – Railway → **Deployments** → latest deployment → **View logs**. Look for Python tracebacks, `ModuleNotFoundError`, or `KeyError` (e.g. missing env var). The app defers loading the graph and Telegram until the first `/webhook`, so **GET /** and **GET /health** should work as soon as the process is up; if you still see 502, the process is likely crashing before binding (logs will show why).
+4. **Remove conflicting config** – If you use the repo’s Dockerfile, do **not** set `startCommand` in `railway.toml` (or the dashboard). Railway runs that command without a shell, so `$PORT` is not expanded and uvicorn gets the literal `$PORT` → "Invalid value for '--port'". The repo’s `railway.toml` leaves `startCommand` unset so the Dockerfile CMD runs (it uses `sh -c` and expands `$PORT`). Remove any Procfile or `railway.json` start command that might override the Dockerfile CMD.
 
 ---
 
@@ -206,6 +234,7 @@ python pa_cli.py
 
 ## Notes
 
+- **Startup:** The webhook app loads only FastAPI at startup; the graph and Telegram client are loaded on the first `POST /webhook`. This keeps **GET /** and **GET /health** working even if env vars for Arcade/LLM/Telegram are missing or misconfigured (only the first webhook request would fail).
 - **Arcade:** Invite the user in Arcade Dashboard → Projects → Members; enable Gmail (and Calendar) for the project.
 - **Memory:** The graph does not pass a store into the agent by default; add a LangGraph Store or Qdrant for `memory_context`.
 - **RAG:** `rag.py` is a stub; implement Docling + all-mpnet-base-v2 + Neon for document ingest and retrieval.

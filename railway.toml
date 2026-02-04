@@ -1,9 +1,12 @@
 # Railway deploy config. See https://docs.railway.app/guides/config-as-code
+# When using the Dockerfile, do NOT set startCommand here: Railway runs it without a shell,
+# so $PORT is not expanded and uvicorn gets the literal "$PORT". The Dockerfile CMD uses
+# sh -c "exec uvicorn ... --port ${PORT:-8000}" so PORT is expanded correctly.
 
 [build]
 builder = "nixpacks"
 
 [deploy]
-startCommand = "uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT"
+# startCommand left unset so Dockerfile CMD is used (shell expands $PORT)
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
