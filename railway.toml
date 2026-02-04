@@ -1,0 +1,9 @@
+# Railway deploy config. See https://docs.railway.app/guides/config-as-code
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "uvicorn telegram_bot.webhook:app --host 0.0.0.0 --port $PORT"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
