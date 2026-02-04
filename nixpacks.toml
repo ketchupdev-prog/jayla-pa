@@ -1,5 +1,5 @@
 # Use slim requirements on Railway to avoid build timeout (no torch/docling/sentence-transformers).
 # See requirements-railway.txt. Local dev: use requirements.txt for full RAG/embeddings.
+# Override install (do not use skip=true — that skips the whole phase and installs nothing).
 [phases.install]
-skip = true
-cmd = ["pip", "install", "-r", "requirements-railway.txt"]
+cmds = ["pip install -r requirements-railway.txt"]
