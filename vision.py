@@ -4,8 +4,17 @@
 import base64
 import os
 
+# Load .env from jayla-pa root so GROQ_API_KEY is set when vision is imported (e.g. by webhook)
+_vision_root = os.path.dirname(os.path.abspath(__file__))
+_env_path = os.path.join(_vision_root, ".env")
+if os.path.isfile(_env_path):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        pass
 
-GROQ_VISION_MODEL = "llama-3.2-90b-vision-preview"
+GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "llama-3.2-90b-vision-preview")
 
 
 async def analyze_image(image_bytes: bytes, prompt: str = "") -> str:
