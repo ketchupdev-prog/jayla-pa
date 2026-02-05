@@ -1,0 +1,11 @@
+# Render Blueprint: use when jayla-pa is the Git repo root.
+# Dashboard: New → Web Service → Connect repo, then set env vars and BASE_URL after first deploy.
+# Monorepo: put a render.yaml at repo root with rootDir: jayla-pa and dockerfilePath: jayla-pa/Dockerfile.
+services:
+  - type: web
+    name: jayla-pa
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Set all vars in Render Dashboard → Environment (see .env.example). PORT is set by Render.
+    healthCheckPath: /health

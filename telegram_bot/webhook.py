@@ -25,7 +25,7 @@ if os.path.isfile(_env_path):
                     k, v = k.strip(), v.strip().strip('"').strip("'")
                     os.environ.setdefault(k, v)
 
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, BackgroundTasks
 from fastapi.responses import JSONResponse
 
 # chat_id -> list of document row ids awaiting retention choice (keep permanent vs auto-offload after 1 week)
@@ -97,8 +97,69 @@ async def cron_send_reminders(
     )
 
 
+async def _process_agent_turn(chat_id: str, text: str) -> None:
+    """Run graph and send reply (used in background so Telegram gets 200 within 60s)."""
+    try:
+        from langchain_core.messages import HumanMessage
+        from telegram_bot.client import send_message, send_typing
+        from user_profile import load_user_profile, save_user_profile, extract_profile_from_message
+        from memory import get_memory_store
+        profile = load_user_profile(chat_id)
+        config = {
+            "configurable": {
+                "thread_id": chat_id,
+                "user_id": os.environ.get("EMAIL", ""),
+                "user_name": profile.get("name", ""),
+                "user_role": profile.get("role", ""),
+                "user_company": profile.get("company", ""),
+                "key_dates": profile.get("key_dates", ""),
+                "communication_preferences": profile.get("communication_preferences", ""),
+                "current_work_context": profile.get("current_work_context", ""),
+                "onboarding_step": profile.get("onboarding_step", 0),
+                "store": get_memory_store(),
+            }
+        }
+        graph = _get_graph()
+        inputs = {"messages": [HumanMessage(content=text)], "step_count": 0}
+        await send_typing(chat_id=chat_id)
+        result = await graph.ainvoke(inputs, config=config)
+        messages = result.get("messages", [])
+        reply = ""
+        for m in reversed(messages):
+            if hasattr(m, "content") and m.content and getattr(m, "type", None) == "ai":
+                reply = m.content if isinstance(m.content, str) else str(m.content)
+                break
+        if reply:
+            await send_message(reply, chat_id=chat_id)
+            print(f"[webhook] Sent reply to chat_id={chat_id}", flush=True)
+        else:
+            print(f"[webhook] No AI reply in result for chat_id={chat_id}", flush=True)
+        if not (profile.get("name") or profile.get("role") or profile.get("company")):
+            extracted = extract_profile_from_message(text)
+            if extracted and (extracted.get("name") or extracted.get("role") or extracted.get("company")):
+                save_user_profile(chat_id, **extracted)
+                print(f"[webhook] Saved user profile for chat_id={chat_id}", flush=True)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[webhook] ERROR type={type(e).__name__} message={e!r}", flush=True)
+        try:
+            from telegram_bot.client import send_message
+            err_str = (str(e) or "").lower()
+            if "ssl" in err_str or "connection" in err_str or "consuming input" in err_str or "closed unexpectedly" in err_str:
+                await send_message("Something went wrong on the connection. Please try again in a moment.", chat_id=chat_id)
+            else:
+                await send_message(f"Sorry, something went wrong: {str(e)[:200]}", chat_id=chat_id)
+        except Exception as e2:
+            print(f"[webhook] Failed to send error to user: {e2}", flush=True)
+
+
 @app.post("/webhook")
-async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")):
+async def webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: str | None = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
+):
     # Reject only if we set a secret AND Telegram sent a different one (allow missing header for backward compat)
     secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
     if secret and x_telegram_bot_api_secret_token is not None and x_telegram_bot_api_secret_token != secret:
@@ -326,61 +387,8 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             # Fall through to normal graph so agent can try or reply
 
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
-    # DEBUG: Log configuration
     print(f"[webhook] DEBUG: user_id={os.environ.get('EMAIL', '')!r}, thread_id={chat_id!r}", flush=True)
-    try:
-        from langchain_core.messages import HumanMessage
-        from telegram_bot.client import send_message, send_typing
-        from user_profile import load_user_profile, save_user_profile, extract_profile_from_message
-        from memory import get_memory_store
-        profile = load_user_profile(chat_id)
-        config = {
-            "configurable": {
-                "thread_id": chat_id,
-                "user_id": os.environ.get("EMAIL", ""),
-                "user_name": profile.get("name", ""),
-                "user_role": profile.get("role", ""),
-                "user_company": profile.get("company", ""),
-                "key_dates": profile.get("key_dates", ""),
-                "communication_preferences": profile.get("communication_preferences", ""),
-                "current_work_context": profile.get("current_work_context", ""),
-                "onboarding_step": profile.get("onboarding_step", 0),
-                "store": get_memory_store(),
-            }
-        }
-        graph = _get_graph()
-        inputs = {"messages": [HumanMessage(content=text)], "step_count": 0}
-        await send_typing(chat_id=chat_id)
-        result = await graph.ainvoke(inputs, config=config)
-        messages = result.get("messages", [])
-        reply = ""
-        for m in reversed(messages):
-            if hasattr(m, "content") and m.content and getattr(m, "type", None) == "ai":
-                reply = m.content if isinstance(m.content, str) else str(m.content)
-                break
-        if reply:
-            await send_message(reply, chat_id=chat_id)
-            print(f"[webhook] Sent reply to chat_id={chat_id}", flush=True)
-        else:
-            print(f"[webhook] No AI reply in result for chat_id={chat_id}", flush=True)
-        # If we had no profile and the user might have introduced themselves, try to extract and save
-        if not (profile.get("name") or profile.get("role") or profile.get("company")):
-            extracted = extract_profile_from_message(text)
-            if extracted and (extracted.get("name") or extracted.get("role") or extracted.get("company")):
-                save_user_profile(chat_id, **extracted)
-                print(f"[webhook] Saved user profile for chat_id={chat_id}", flush=True)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        try:
-            from telegram_bot.client import send_message
-            err_str = (str(e) or "").lower()
-            # Transient SSL/connection errors: show friendly message instead of raw error
-            if "ssl" in err_str or "connection" in err_str or "consuming input" in err_str or "closed unexpectedly" in err_str:
-                await send_message("Something went wrong on the connection. Please try again in a moment.", chat_id=chat_id)
-            else:
-                await send_message(f"Sorry, something went wrong: {str(e)[:200]}", chat_id=chat_id)
-            print(f"[webhook] Sent error message to chat_id={chat_id}", flush=True)
-        except Exception as e2:
-            print(f"[webhook] Failed to send error to user: {e2}", flush=True)
+    # Return 200 immediately so Telegram does not close the connection (60s limit).
+    # Agent runs in background; reply is sent when done.
+    background_tasks.add_task(_process_agent_turn, chat_id, text)
     return {"ok": True}
