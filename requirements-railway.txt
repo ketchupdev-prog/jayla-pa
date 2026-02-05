@@ -1,6 +1,8 @@
 # Railway webhook deploy. Image must stay under 4GB; no torch/docling/sentence-transformers.
 # Document parse: PyPDF2 + docx2txt only. Embedding: not available on Railway (ingest returns friendly message).
 # Postgres checkpointer: conversation history persists across restarts (production).
+# TTS: gTTS requires internet; pyttsx3 works offline.
+# Arcade pin: see constraints-railway.txt (ToolManager API).
 langgraph
 langgraph-checkpoint-postgres
 langchain-core
@@ -19,3 +21,7 @@ psycopg2-binary
 langchain-text-splitters
 PyPDF2
 docx2txt
+# Text-to-Speech (free):
+pyttsx3
+gtts
+pydub

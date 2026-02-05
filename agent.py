@@ -22,13 +22,13 @@ from rag import retrieve as rag_retrieve
 
 MAX_CONTENT_CHARS = int(os.environ.get("PA_MAX_CONTENT_CHARS", "3500"))
 
-# Timezone for greeting and current date (e.g. "Africa/Windhoek"). Default UTC.
+# Timezone for greeting and current date. Default Africa/Windhoek; set DEFAULT_TIMEZONE to override.
 def _get_tz():
-    tz_name = os.environ.get("TIMEZONE", "UTC")
+    tz_name = os.environ.get("DEFAULT_TIMEZONE") or "Africa/Windhoek"
     try:
         return ZoneInfo(tz_name)
     except Exception:
-        return ZoneInfo("UTC")
+        return ZoneInfo("Africa/Windhoek")
 
 
 def _get_time_of_day() -> str:
@@ -50,7 +50,7 @@ def _get_datetime_context() -> dict:
     today = now.strftime("%Y-%m-%d")
     tomorrow_dt = now + timedelta(days=1)
     tomorrow = tomorrow_dt.strftime("%Y-%m-%d")
-    timezone_name = os.environ.get("TIMEZONE", "UTC")
+    timezone_name = os.environ.get("DEFAULT_TIMEZONE") or "Africa/Windhoek"
     return {
         "current_date": today,
         "tomorrow_date": tomorrow,
@@ -123,6 +123,7 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
     memory_context = ""
     if store:
         namespace, _ = get_memory_namespace(config)
+        print(f"[agent] DEBUG: Memory store available, namespace={namespace}", flush=True)
         last_user = next(
             (m for m in reversed(messages) if getattr(m, "type", None) == "human"),
             None,
@@ -130,6 +131,7 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
         if last_user:
             memories = get_memories(store, namespace, str(last_user.content))
             memory_context = "\n".join(f"- {m}" for m in memories) if memories else ""
+            print(f"[agent] DEBUG: Retrieved {len(memories)} memories", flush=True)
     conf = config.get("configurable") or {}
     user_name = (conf.get("user_name") or "").strip()
     user_role = (conf.get("user_role") or "").strip()
@@ -157,6 +159,8 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
         parts.append(f"Current work: projects, deadlines, tasks, reminders: {current_work_context}. Use this to prioritise and suggest follow-up.")
     onboarding_context = "\n".join(parts) if parts else ""
     dt_ctx = _get_datetime_context()
+    # DEBUG: Log datetime context
+    print(f"[agent] DEBUG: datetime_context={dt_ctx}", flush=True)
     # RAG: retrieve top-k chunks for last user message and inject as document context (ONBOARDING_PLAN.md §5, Phase 3)
     last_user_text = ""
     for m in reversed(messages):
@@ -165,6 +169,7 @@ def call_agent(state: JaylaState, config: RunnableConfig, *, store=None):
             break
     user_id_rag = conf.get("user_id") or os.environ.get("EMAIL", "") or (conf.get("thread_id") if isinstance(conf.get("thread_id"), str) else "")
     doc_chunks = rag_retrieve(last_user_text, user_id=user_id_rag or None, limit=5) if last_user_text else []
+    print(f"[agent] DEBUG: RAG retrieved {len(doc_chunks)} chunks", flush=True)
     document_context = (
         "Document context (use to ground answers):\n" + "\n\n---\n\n".join(doc_chunks)
         if doc_chunks

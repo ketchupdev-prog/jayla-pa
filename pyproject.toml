@@ -5,21 +5,31 @@ description = "Jayla personal assistant (PA) — LangGraph + Arcade + Neon + Qdr
 requires-python = ">=3.10"
 dependencies = [
     "langgraph",
+    "langgraph-checkpoint-postgres",
     "langchain-core",
     "langchain-groq",
+    "groq",
     "langchain-deepseek",
-    "langchain-arcade",
+    "langchain-arcade==1.3.1",
     "langchain-community",
+    "langchain-text-splitters",
     "qdrant-client",
     "sentence-transformers",
     "python-dotenv",
     "fastapi",
     "uvicorn",
     "python-telegram-bot",
+    "httpx",
     "docling",
     "psycopg2-binary",
-    "pypdf>=6.6.2",
-    "pymupdf>=1.26.7",
+    "PyPDF2",
+    "docx2txt",
+    # Text-to-Speech (free):
+    "pyttsx3",
+    "gtts",
+    "pydub",
+    "pytest",
+    "pytest-asyncio",
 ]
 
 [tool.setuptools.packages.find]

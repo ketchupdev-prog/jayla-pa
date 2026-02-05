@@ -11,7 +11,7 @@
 | Layer | Recommended pattern | Source |
 |-------|---------------------|--------|
 | **LLM** | **Groq** or **DeepSeek** (recommended for less rate limiting; see §1.2) | arcade_1_basics, pa-agent, pa-agent3; §1.2 |
-| **Tools** | Arcade `ToolManager` (Gmail, Calendar) + **own-DB project management** (Neon/Postgres) + optional custom tools | arcade_1_basics, pa-agent; §8 |
+| **Tools** | Arcade `ToolManager` (Gmail, Calendar) + **own-DB project management** (Neon/Postgres) + optional custom tools (Brave search, RAG, **image gen** via Pollinations.ai) | arcade_1_basics, pa-agent; §8 |
 | **Orchestration** | LangGraph: `agent → authorization (if needed) → tools → agent` | arcade_1_basics, pa-agent |
 | **Auth** | Explicit **authorization node** + `manager.authorize()` → show URL → `manager.wait_for_auth()` | arcade_1_basics, AUTHORIZATION.md |
 | **User identity** | **User profiles** (Neon `user_profiles`: name, role, company + onboarding fields); `thread_id` per Telegram chat; same `user_id` (e.g. `EMAIL`) for Arcade | jayla-pa user_profile.py, ONBOARDING_PLAN.md |
@@ -159,10 +159,10 @@ For Telegram, keep auth handling on a flow that can show a link (e.g. “Open th
 
 ## 5. Checklist for Your New PA Agent
 
-1. **Env**: `ARCADE_API_KEY`, `EMAIL` (or `USER_ID`); either `GROQ_API_KEY` + `GROQ_MODEL` or `DEEPSEEK_API_KEY` + `LLM_MODEL` (e.g. `deepseek-chat`, §1.2); `QDRANT_URL`, `QDRANT_API_KEY` for Qdrant; `DATABASE_URL` (Neon) for user profiles, project management + RAG; optional `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TIMEZONE`, `USER_NAME`/`USER_ROLE`/`USER_COMPANY` for CLI. See §1.1, §1.2, ONBOARDING_PLAN.md.
+1. **Env**: `ARCADE_API_KEY`, `EMAIL` (or `USER_ID`); either `GROQ_API_KEY` + `GROQ_MODEL` or `DEEPSEEK_API_KEY` + `LLM_MODEL` (e.g. `deepseek-chat`, §1.2); `QDRANT_URL`, `QDRANT_API_KEY` for Qdrant; `DATABASE_URL` (Neon) for user profiles, project management + RAG; optional `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `DEFAULT_TIMEZONE`, `USER_NAME`/`USER_ROLE`/`USER_COMPANY` for CLI. See §1.1, §1.2, ONBOARDING_PLAN.md.
 2. **Arcade**: User invited in Dashboard → Projects → Members; Gmail (and Calendar if used) enabled for the project.
 3. **Graph**: Agent → authorization (if any tool requires auth) → tools → agent; `user_id` and (for jayla-pa) user profile fields in config.
-4. **Tools**: `ToolManager.init_tools(toolkits=["Gmail", "Google Calendar"])` + custom project/task tools backed by your DB (§8); optional custom tools for attachments/Telegram.
+4. **Tools**: `ToolManager.init_tools(toolkits=["Gmail", "Google Calendar"])` + custom project/task tools backed by your DB (§8); optional custom tools for Brave search, RAG, image generation (Pollinations), attachments/Telegram.
 5. **Truncation**: Custom tool node that truncates tool message content (e.g. 3500 chars, HTML stripped).
 6. **Memory (required so the assistant remembers):** (a) **Conversation persistence** — Postgres checkpointer (e.g. `AsyncPostgresSaver`) so messages and tool outputs persist across restarts; (b) **Long-term memory** — Qdrant for “remember X” facts: retrieve via `get_memories` (inject `memory_context`) and **write** via `put_memory` when the user says to remember something (memory extraction node or tool + MEMORY_ANALYSIS_PROMPT). Neon for user profiles + onboarding, project management (§8), RAG. See §1.1, §2.3, docs/WHERE_DATA_IS_STORED.md.
 7. **Interfaces**: Start with CLI (like arcade_1_basics); add Streamlit or Telegram reusing same graph and config; for Telegram, load user profile and pass onboarding context into system prompt (jayla-pa).
@@ -244,10 +244,12 @@ Patterns from **7_Agent_Architecture/7.7-SupervisorAgent** that enhance jayla-pa
 | **Max steps in graph** | Cap agent→tools→agent iterations (e.g. 15–20) to prevent infinite loops and control cost; then END and return last reply. |
 | **Research-aware email draft** | When drafting email, pre-fill body from RAG/context (bullets); optional tool `suggest_email_body_from_context` returns suggested body text for the agent to pass to Gmail draft. |
 | **Fallback hint** | If the user is just chatting or intent is unclear, answer briefly and optionally suggest: “I can also search your docs, check your calendar, or draft an email if you’d like.” |
+| **OCR / vision** | Telegram **photo** → download → Groq vision (`vision.analyze_image`, llama-3.2-90b-vision-preview) → inject `[Image: ...]` into user message so the agent can "see" the image. Requires GROQ_API_KEY. |
+| **Image generation** | Tool `generate_image(prompt)` via **Pollinations.ai** (free, no API key); returns URL for user to open. See `tools_custom/image_gen_tools.py` and docs/AVA_VS_JAYLA_IMAGE_OCR.md. |
 | **Optional deps module** | Group env-derived deps (e.g. BRAVE_API_KEY, DATABASE_URL) into a small `deps` module and pass into config so tools stay testable. |
 | **Pytest** | Add `tests/` with e.g. test_agent.py (call_agent with mocks), test_rag.py (retrieve), test_graph.py (invoke), test_webhook.py (document/voice/retention). |
 
-**Quick wins (in order):** (1) Brave web search tool, (2) prompt tweak for tool summaries, (3) max steps in graph, (4) research-aware draft prompt/helper, (5) pytest.
+**Quick wins (in order):** (1) Brave web search tool, (2) prompt tweak for tool summaries, (3) max steps in graph, (4) research-aware draft prompt/helper, (5) OCR/vision + image gen, (6) pytest.
 
 ---
 

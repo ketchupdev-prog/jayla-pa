@@ -1,5 +1,6 @@
 # See PERSONAL_ASSISTANT_PATTERNS.md C.14
 # Neon: use psycopg2-binary (no PyPI package "neon-serverless" for Python)
+# Arcade pin: see constraints-railway.txt (ToolManager API).
 langgraph
 langgraph-checkpoint-postgres
 langchain-core
@@ -21,5 +22,9 @@ psycopg2-binary
 # Optional RAG fallback when Docling fails (PDF/DOCX):
 PyPDF2
 docx2txt
+# Text-to-Speech (free alternatives):
+pyttsx3
+gtts
+pydub
 pytest
 pytest-asyncio

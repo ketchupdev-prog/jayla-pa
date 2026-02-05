@@ -31,7 +31,7 @@ Copy `.env.example` to `.env` and fill in:
 
 - **Arcade:** `ARCADE_API_KEY`, `EMAIL`
 - **LLM:** `GROQ_API_KEY` + `GROQ_MODEL` or `DEEPSEEK_API_KEY` + `LLM_MODEL`
-- **User:** `USER_ID` (or `EMAIL`). Optional for CLI: `USER_NAME`, `USER_ROLE`, `USER_COMPANY`, `TIMEZONE`; in Telegram Jayla asks for name/role/company if not set and stores them (and onboarding: key dates, communication preferences, current work context) per chat in Neon.
+- **User:** `USER_ID` (or `EMAIL`). Optional for CLI: `USER_NAME`, `USER_ROLE`, `USER_COMPANY`, `DEFAULT_TIMEZONE`; in Telegram Jayla asks for name/role/company if not set and stores them (and onboarding: key dates, communication preferences, current work context) per chat in Neon.
 - **Neon:** `DATABASE_URL` (project management + RAG)
 - **Qdrant:** `QDRANT_URL`, `QDRANT_API_KEY` (long-term memory)
 - **Brave Search (optional):** `BRAVE_API_KEY` — web search for "latest", "current", "news". Set on Railway for webhook.
@@ -185,7 +185,7 @@ jayla-pa/
 ├── docs/
 │   ├── STT_TTS_GROQ.md
 │   ├── WHERE_DATA_IS_STORED.md
-│   ├── AVA_VS_JAYLA_IMAGE_OCR.md   # Ava has OCR/vision + image gen; Jayla does not yet
+│   ├── AVA_VS_JAYLA_IMAGE_OCR.md   # Ava vs Jayla: OCR/vision (Groq) and image gen (Pollinations)
 │   └── SUPERVISOR_AGENT_GEMS.md
 ├── ONBOARDING_PLAN.md      # Onboarding flow (5 questions + doc upload)
 ├── PERSONAL_ASSISTANT_PATTERNS.md
@@ -244,7 +244,7 @@ jayla-pa/
 - `graph.py` → `agent`, `nodes`, `langgraph` (MemorySaver, StateGraph, etc.), `langgraph.prebuilt` (ToolNode)
 - `agent.py` → `tools.get_tools_for_model`, `memory`, `prompts`, `langchain_core`, `langchain_groq`, optional `langchain_deepseek`
 - `nodes.py` → `tools.get_manager`, `langchain_core`, `langgraph.graph`
-- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`, `tools_custom.rag_tools.get_rag_tools`
+- `tools.py` → `langchain_arcade.ToolManager`, `langgraph.prebuilt.ToolNode`, `tools_custom.project_tasks.get_project_tools`, `tools_custom.rag_tools.get_rag_tools`, `tools_custom.brave_tools.get_brave_tools`, `tools_custom.image_gen_tools.get_image_gen_tools`
 - `tools_custom/project_tasks.py` → `langchain_core.tools.tool`, optional `psycopg2`
 - `tools_custom/rag_tools.py` → `rag.retrieve`, `langchain_core.tools.tool`
 
@@ -349,6 +349,7 @@ python pa_cli.py
 - **Memory:** When `QDRANT_URL` (and optionally `QDRANT_API_KEY`) is set, the webhook and CLI pass a Qdrant-backed memory store in `config["configurable"]["store"]`. The agent searches it by the last user message and injects `memory_context` into the system prompt so Jayla can use stored facts. Run `python scripts/init_qdrant.py` once. Memory writing (e.g. when the user says "remember X") is not yet in the graph—add memories via script or implement MEMORY_ANALYSIS_PROMPT + put_memory in the flow.
 - **Conversation persistence (production):** When **`DATABASE_URL`** is set, the webhook uses a **Postgres checkpointer** (`AsyncPostgresSaver`) so conversation history (messages, tool calls, tool outputs) persists across restarts. Without `DATABASE_URL`, the app falls back to **MemorySaver** (in-memory only). Long-term "remember X" facts are read from **Qdrant** but nothing writes to it yet. See **docs/WHERE_DATA_IS_STORED.md**.
 - **Reset data:** Run `python scripts/reset_data.py --yes` to clear Neon (all tables) and Qdrant (long_term_memory). Destructive; use for dev or full wipe. Then run migrations and `init_qdrant.py` to recreate schema/collection.
-- **OCR / vision:** When the user sends a **photo** in Telegram, the webhook downloads it and uses **Groq vision** (`vision.analyze_image` with **llama-3.2-90b-vision-preview**) to describe the image; the description is injected as `[Image: ...]` in the user message so the agent can "see" it. Requires **GROQ_API_KEY** (same as chat/STT). No image generation. See **docs/AVA_VS_JAYLA_IMAGE_OCR.md**.
+- **OCR / vision:** When the user sends a **photo** in Telegram, the webhook downloads it and uses **Groq vision** (`vision.analyze_image` with **llama-3.2-90b-vision-preview**) to describe the image; the description is injected as `[Image: ...]` in the user message so the agent can "see" it. Requires **GROQ_API_KEY** (same as chat/STT). See **docs/AVA_VS_JAYLA_IMAGE_OCR.md**.
+- **Image generation:** Tool **generate_image(prompt)** uses **Pollinations.ai** (free, no API key); returns a URL the user can open. See `tools_custom/image_gen_tools.py` and docs/AVA_VS_JAYLA_IMAGE_OCR.md.
 - **RAG:** Document ingest and retrieval are implemented (ONBOARDING_PLAN.md Phase 2–3). **Local/CLI (full deps):** Send a PDF/DOCX as a Telegram document → webhook downloads and calls `rag.ingest_document()` (bytes→text via Docling or PyPDF2/docx2txt → RecursiveCharacterTextSplitter → sentence-transformers all-mpnet-base-v2 → Neon `documents`). **Railway (slim image, under 4GB):** Parse uses PyPDF2/docx2txt only; embedding is not available, so ingest returns a friendly message—add documents via CLI or local for full RAG. After ingest (when embedding is available), Jayla asks whether to **keep the document permanently** or **auto-remove after 7 days**; reply **keep** (or **permanent**) for permanent, **week** for auto-offload. `rag.update_documents_retention(ids, expires_at)` sets `expires_at` (NULL = permanent). On each turn, `rag.retrieve()` runs over the last user message and the top-k chunks are injected as "Document context" in the system prompt. Tool `search_my_documents(query)` in `tools_custom/rag_tools.py` lets the user explicitly search uploaded docs.
-- **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.
+- **Date/time:** The agent receives full datetime context (weekday, month, year, today, tomorrow, current time in `DEFAULT_TIMEZONE`) in the system prompt so "today", "tomorrow", and "now" are never guessed (e.g. no January 1). Set `DEFAULT_TIMEZONE` in `.env` (e.g. `Africa/Windhoek`) for correct calendar/reminder times.

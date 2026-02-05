@@ -3,6 +3,7 @@
 # so $PORT is not expanded and uvicorn gets the literal "$PORT". The Dockerfile CMD uses
 # sh -c "exec uvicorn ... --port ${PORT:-8000}" so PORT is expanded correctly.
 # Force Dockerfile so Railway does not use Railpack/Nixpacks (which can use pyproject/uv = slow).
+# Deps: requirements-railway.txt (slim image); version pins in constraints-railway.txt.
 [build]
 builder = "DOCKERFILE"
 

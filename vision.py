@@ -14,7 +14,7 @@ if os.path.isfile(_env_path):
     except ImportError:
         pass
 
-GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "llama-3.2-90b-vision-preview")
+GROQ_VISION_MODEL = os.environ.get("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 
 async def analyze_image(image_bytes: bytes, prompt: str = "") -> str:

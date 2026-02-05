@@ -54,7 +54,9 @@ async def _lifespan(app: FastAPI):
         from graph import build_graph
         app.state.graph = build_graph()
         print("[webhook] DATABASE_URL not set; using MemorySaver (conversation history in-memory only).", flush=True)
-        yield
+    tz = (os.environ.get("DEFAULT_TIMEZONE") or "Africa/Windhoek").strip() or "Africa/Windhoek"
+    print(f"[webhook] DEFAULT_TIMEZONE={tz}", flush=True)
+    yield
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -324,6 +326,8 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
             # Fall through to normal graph so agent can try or reply
 
     print(f"[webhook] Processing from chat_id={chat_id} text={text[:50]!r}...", flush=True)
+    # DEBUG: Log configuration
+    print(f"[webhook] DEBUG: user_id={os.environ.get('EMAIL', '')!r}, thread_id={chat_id!r}", flush=True)
     try:
         from langchain_core.messages import HumanMessage
         from telegram_bot.client import send_message, send_typing
@@ -370,7 +374,12 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None 
         traceback.print_exc()
         try:
             from telegram_bot.client import send_message
-            await send_message(f"Sorry, something went wrong: {str(e)[:200]}", chat_id=chat_id)
+            err_str = (str(e) or "").lower()
+            # Transient SSL/connection errors: show friendly message instead of raw error
+            if "ssl" in err_str or "connection" in err_str or "consuming input" in err_str or "closed unexpectedly" in err_str:
+                await send_message("Something went wrong on the connection. Please try again in a moment.", chat_id=chat_id)
+            else:
+                await send_message(f"Sorry, something went wrong: {str(e)[:200]}", chat_id=chat_id)
             print(f"[webhook] Sent error message to chat_id={chat_id}", flush=True)
         except Exception as e2:
             print(f"[webhook] Failed to send error to user: {e2}", flush=True)

@@ -44,12 +44,12 @@ logger = logging.getLogger("jayla.test_tools")
 
 
 def _today_iso():
-    """Current date YYYY-MM-DD from TIMEZONE env (so calendar tests use correct date, not LLM cutoff)."""
-    tz_name = os.environ.get("TIMEZONE", "UTC")
+    """Current date YYYY-MM-DD from DEFAULT_TIMEZONE (so calendar tests use correct date)."""
+    tz_name = os.environ.get("DEFAULT_TIMEZONE") or "Africa/Windhoek"
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
-        tz = ZoneInfo("UTC")
+        tz = ZoneInfo("Africa/Windhoek")
     return datetime.now(tz).strftime("%Y-%m-%d")
 
 
@@ -545,7 +545,7 @@ async def test_email_full_flow():
 
 def main():
     today = _today_iso()
-    tz_name = os.environ.get("TIMEZONE", "UTC")
+    tz_name = os.environ.get("DEFAULT_TIMEZONE") or "Africa/Windhoek"
     print("=== Jayla PA: test all tool calls (with logging, auth interrupt, memory, cleanup) ===")
     print(f"Current date (used for calendar): {today}  Timezone: {tz_name}\n")
     if not os.environ.get("PA_AUTH_NONBLOCK"):

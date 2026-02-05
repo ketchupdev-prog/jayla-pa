@@ -4,7 +4,7 @@
 
 > Reference implementation for **jayla-pa**: single-user PA with user profiles and onboarding (Neon), **Postgres checkpointer** for conversation persistence, **Qdrant** for long-term memory (read + write), Neon for project management + RAG, Arcade for Gmail/Calendar, LangGraph agent → authorization → tools → agent. Code below is aligned with the **jayla-pa** codebase.
 >
-> **Principle: an assistant that can’t remember is not acceptable.** (1) **Conversation persistence** — use a Postgres checkpointer (e.g. `AsyncPostgresSaver`) so messages and tool outputs persist across restarts; current code uses `MemorySaver()` (dev-only). (2) **Long-term memory writing** — when the user says “remember X”, the graph must extract and call `put_memory` so Qdrant is populated; currently only read (`get_memories`) is wired. See **PERSONAL_ASSISTANT_PATTERNS.md** §1.1, §2.3 and **docs/WHERE_DATA_IS_STORED.md**.
+> **Principle: an assistant that can’t remember is not acceptable.** (1) **Conversation persistence** — use a Postgres checkpointer (e.g. `AsyncPostgresSaver`) so messages and tool outputs persist across restarts; jayla-pa uses **Postgres checkpointer** when `DATABASE_URL` is set (webhook lifespan); otherwise falls back to `MemorySaver()`. (2) **Long-term memory writing** — when the user says “remember X”, the graph must extract and call `put_memory` so Qdrant is populated; currently only read (`get_memories`) is wired. See **PERSONAL_ASSISTANT_PATTERNS.md** §1.1, §2.3 and **docs/WHERE_DATA_IS_STORED.md**.
 
 ---
 
@@ -31,6 +31,7 @@ jayla-pa/
 ├── user_profile.py
 ├── pa_cli.py
 ├── speech_to_text.py      # STT (Groq Whisper) for voice messages
+├── vision.py              # OCR/vision: Groq Llama-4-Scout for photo description
 ├── ONBOARDING_PLAN.md
 ├── sql/
 │   ├── 0-drop-all.sql
@@ -46,10 +47,15 @@ jayla-pa/
 ├── tools_custom/
 │   ├── gmail_attachment.py
 │   ├── project_tasks.py
-│   └── rag_tools.py       # search_my_documents (RAG)
+│   ├── rag_tools.py       # search_my_documents, suggest_email_body_from_context (RAG)
+│   ├── brave_tools.py     # search_web (Brave API; optional BRAVE_API_KEY)
+│   └── image_gen_tools.py # generate_image (Pollinations.ai; free, no key)
 └── scripts/
     ├── run_sql_migrations.py
     ├── init_qdrant.py
+    ├── setup_checkpointer.py  # Postgres checkpointer tables (webhook also runs on startup)
+    ├── reset_data.py      # Reset Neon + Qdrant (--yes to confirm; destructive)
+    ├── inspect_qdrant.py  # List collections, point count
     ├── set_telegram_webhook.py
     ├── set_railway_vars.sh
     ├── curl_deployed.sh
@@ -158,7 +164,7 @@ class Configuration:
 
 ### C.2 graph.py (arcade_1_basics + pa_agent; jayla-pa uses lazy _tools_node)
 
-**Checkpointer (production):** An assistant that can’t remember past conversations is not acceptable. Use `MemorySaver()` only for local/dev. For production **must** pass a Postgres checkpointer (e.g. `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`) using `DATABASE_URL` so conversation history persists. See PERSONAL_ASSISTANT_PATTERNS.md §2.3 and docs/WHERE_DATA_IS_STORED.md.
+**Checkpointer (production):** An assistant that can’t remember past conversations is not acceptable. Use `MemorySaver()` only when no `DATABASE_URL`. For production the **webhook** builds the graph in lifespan with a Postgres checkpointer (e.g. `AsyncPostgresSaver` from `langgraph-checkpoint-postgres`) using `DATABASE_URL` so conversation history persists. See PERSONAL_ASSISTANT_PATTERNS.md §2.3, C.8, and docs/WHERE_DATA_IS_STORED.md.
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
@@ -241,7 +247,7 @@ from prompts import JAYLA_SYSTEM_PROMPT, JAYLA_USER_CONTEXT_KNOWN, JAYLA_USER_CO
 MAX_CONTENT_CHARS = int(os.environ.get("PA_MAX_CONTENT_CHARS", "3500"))
 
 def _get_time_of_day() -> str:
-    tz_name = os.environ.get("TIMEZONE", "UTC")
+    tz_name = os.environ.get("DEFAULT_TIMEZONE", "Africa/Windhoek")
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -346,9 +352,11 @@ def get_manager():
 def get_tools():
     from tools_custom.project_tasks import get_project_tools
     from tools_custom.rag_tools import get_rag_tools
+    from tools_custom.brave_tools import get_brave_tools
+    from tools_custom.image_gen_tools import get_image_gen_tools
     manager = get_manager()
     arcade_tools = manager.to_langchain(use_interrupts=True)
-    return arcade_tools + get_project_tools() + get_rag_tools()
+    return arcade_tools + get_project_tools() + get_rag_tools() + get_brave_tools() + get_image_gen_tools()
 
 def get_tools_for_model():
     return get_tools()
@@ -394,25 +402,44 @@ Current activity: {current_activity}
 MEMORY_ANALYSIS_PROMPT = """Extract important personal facts from the message. Output JSON: {"is_important": bool, "formatted_memory": str or null}. Only extract facts, not requests. Examples: "remember I love Star Wars" -> {"is_important": true, "formatted_memory": "Loves Star Wars"}. "How are you?" -> {"is_important": false, "formatted_memory": null}. Message: {message}"""
 ```
 
-### C.8 telegram_bot/webhook.py (jayla-pa: load profile, pass onboarding in config)
+### C.8 telegram_bot/webhook.py (jayla-pa: lifespan with Postgres checkpointer, load profile, photo/voice/document handling)
+
+**Production:** Use **lifespan** to build the graph with **Postgres checkpointer** when `DATABASE_URL` is set (`AsyncPostgresSaver` from `langgraph-checkpoint-postgres`); otherwise `MemorySaver()`. **Photo:** If `message.photo` present, download largest size → `vision.analyze_image()` (Groq vision) → inject `[Image: ...]` into user message. **Voice:** Download voice file → `speech_to_text.transcribe()` (Groq Whisper) → use transcript as text. **Document:** PDF/DOCX → `rag.ingest_document()` (parse + optional embed). See PERSONAL_ASSISTANT_PATTERNS.md §6 and docs/AVA_VS_JAYLA_IMAGE_OCR.md.
 
 ```python
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header
 from langchain_core.messages import HumanMessage
 from user_profile import load_user_profile, save_user_profile, extract_profile_from_message
 from graph import build_graph
 from telegram_bot.client import send_message, send_typing
 
-app = FastAPI()
-_graph = None
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    db_url = (os.environ.get("DATABASE_URL") or "").strip()
+    if db_url:
+        try:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            async with AsyncPostgresSaver.from_conn_string(db_url) as checkpointer:
+                await checkpointer.setup()
+                app.state.graph = build_graph(checkpointer)
+                yield
+        except Exception:
+            app.state.graph = build_graph()
+            yield
+    else:
+        app.state.graph = build_graph()
+        yield
+
+app = FastAPI(lifespan=_lifespan)
 
 def _get_graph():
-    global _graph
-    if _graph is None:
-        from graph import build_graph as _build
-        _graph = _build()
-    return _graph
+    return getattr(app.state, "graph", None) or _build_graph_fallback()
+
+def _build_graph_fallback():
+    from graph import build_graph
+    return build_graph()
 
 @app.post("/webhook")
 async def webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")):
@@ -564,8 +591,11 @@ TELEGRAM_CHAT_ID=
 TELEGRAM_WEBHOOK_SECRET=
 BASE_URL=   # Public URL for webhook (no trailing slash)
 
+# Optional: web search (Brave API); set on Railway for "search the internet"
+# BRAVE_API_KEY=
+
 # Optional: timezone for greetings and calendar/reminder times; CLI user context
-TIMEZONE=UTC
+DEFAULT_TIMEZONE=Africa/Windhoek
 # USER_NAME=
 # USER_ROLE=
 # USER_COMPANY=
@@ -575,17 +605,20 @@ TIMEZONE=UTC
 
 ```
 langgraph
+langgraph-checkpoint-postgres
 langchain-core
 langchain-groq
 langchain-deepseek
 langchain-arcade==1.3.1
 langchain-community
 qdrant-client
+groq
 sentence-transformers
 python-dotenv
 fastapi
 uvicorn
 python-telegram-bot
+httpx
 docling
 langchain-text-splitters
 psycopg2-binary
@@ -593,7 +626,7 @@ PyPDF2
 docx2txt
 ```
 
-*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile. Image must stay under 4GB: no docling, no sentence-transformers. Document parse on Railway uses PyPDF2 + docx2txt only; ingest returns a message that embedding isn't available—add documents via CLI or local for full RAG.)*
+*(For Railway/slim deploy use requirements-railway.txt + constraints-railway.txt; see Dockerfile. Image must stay under 4GB: no docling, no sentence-transformers. Document parse on Railway uses PyPDF2 + docx2txt only; ingest returns a message that embedding isn't available—add documents via CLI or local for full RAG. Vision uses Groq; image generation uses Pollinations.ai, no extra key.)*
 
 ### C.17 langgraph.json
 
@@ -968,8 +1001,277 @@ async def test_graph_invoke():
     assert "messages" in result
 ```
 
-**`requirements.txt`:** add `pytest`, `pytest-asyncio` for async tests. Run: `pytest tests/ -v`.
+**`requirements.txt`:** add `pytest`, `pytest-asyncio` for async tests. Run: `pytest tests/ -v` for all tests, or `pytest tests/ -m "not integration"` for unit tests only.
 
 ---
 
-*End of appendix. This document is the jayla-pa implementation reference; see also ONBOARDING_PLAN.md and PERSONAL_ASSISTANT_PATTERNS.md.*
+
+
+
+## F. Test Files (Actual Implementation Tests)
+
+Tests that run against real APIs and databases for full coverage.
+
+### F.1 Test Files Overview
+
+| File | Tests | Target |
+|------|-------|--------|
+| `tests/test_vision.py` | Vision/OCR with Groq Llama-4 | Groq Vision API |
+| `tests/test_speech_to_text.py` | Speech-to-text with Whisper | Groq Whisper API |
+| `tests/test_memory.py` | Qdrant memory operations | Qdrant Vector DB |
+| `tests/test_rag_db.py` | RAG with Neon PostgreSQL | Neon DB |
+
+### F.2 Running Tests
+
+```bash
+# Run all tests (requires API keys)
+pytest tests/ -v
+
+# Run unit tests only (no real API calls)
+pytest tests/ -m "not integration" -v
+
+# Run specific test file
+pytest tests/test_vision.py -v
+
+# Run with live databases
+pytest tests/test_memory.py tests/test_rag_db.py -v
+```
+
+### F.3 Test Fixtures (conftest.py)
+
+- `test_user_id` - Unique user ID for test isolation
+- `test_thread_id` - Unique thread ID
+- `test_image_data` - Valid PNG image (red square)
+- `test_audio_data` - Valid WAV audio file
+- `telegram_config` - Telegram webhook-style config
+- `telegram_config_known_user` - Config with user profile
+
+### F.4 Integration Tests
+
+Integration tests require real API connections:
+
+```python
+@pytest.mark.asyncio
+async def test_analyze_image_real_api(test_image_data):
+    result = await analyze_image(test_image_data, "What color?")
+    assert "red" in result.lower()
+
+def test_retrieve_with_real_db():
+    result = retrieve("test query", user_id="test-user")
+    assert isinstance(result, list)
+```
+
+---
+
+### E.1 Pydantic Settings Management
+
+**Cleaner environment variable handling.**
+
+**New file: `settings.py`**
+
+```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    
+    # Required
+    GROQ_API_KEY: str
+    DEEPSEEK_API_KEY: str
+    ARCADE_API_KEY: str
+    DATABASE_URL: str
+    QDRANT_URL: str
+    QDRANT_API_KEY: str
+    TELEGRAM_BOT_TOKEN: str
+    
+    # Optional with defaults
+    LLM_MODEL: str = "deepseek-chat"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    DEFAULT_TIMEZONE: str = "Africa/Windhoek"
+
+settings = Settings()
+```
+
+**Install:** `pip install pydantic-settings`
+
+---
+
+### E.2 Structured Output with Pydantic
+
+**Better parsing for complex responses.**
+
+```python
+from langchain_groq import ChatGroq
+from pydantic import BaseModel, Field
+
+class ActionItem(BaseModel):
+    """Parse action items from conversation."""
+    task: str = Field(description="The task to remember")
+    priority: str = Field(description="low/medium/high")
+    deadline: str | None = Field(default=None)
+
+structured_llm = llm.with_structured_output(ActionItem)
+result = structured_llm.invoke("Remember to call mom tomorrow high priority")
+# result is ActionItem with .task, .priority, .deadline
+```
+
+---
+
+### E.3 Custom Exceptions
+
+**Better error handling.**
+
+**New file: `exceptions.py`**
+
+```python
+class JaylaError(Exception):
+    """Base exception for Jayla."""
+    pass
+
+class VisionError(JaylaError):
+    """Vision/OCR operations failed."""
+    pass
+
+class SpeechError(JaylaError):
+    """Speech-to-text operations failed."""
+    pass
+
+class MemoryError(JaylaError):
+    """Memory operations failed."""
+    pass
+```
+
+---
+
+### E.4 Memory Context Generation
+
+**Generate summaries from chat history.**
+
+**New file: `memory_context.py`**
+
+```python
+from langchain_core.messages import BaseMessage
+
+async def generate_memory_context(chat_history: list[BaseMessage], max_messages: int = 10) -> str:
+    """Generate memory context from recent messages."""
+    recent = chat_history[-max_messages:]
+    lines = []
+    for m in recent:
+        content = str(m.content)[:100]
+        if 'remember' in content.lower() or 'important' in content.lower():
+            lines.append(f"{m.type}: {content}")
+    return "\n".join(lines) if lines else ""
+```
+
+---
+
+### E.5 Free Image Generation
+
+**Pollinations.ai may have issues. Alternatives:**
+
+1. **Groq Vision for Analysis** - Already working
+2. **ASCII Art** - Free, no API
+
+```python
+# ASCII art generator
+def text_to_ascii(text: str) -> str:
+    try:
+        from pyfiglet import figlet_format
+        return figlet_format(text)
+    except ImportError:
+        return text
+```
+
+**Install:** `pip install pyfiglet`
+
+---
+
+### E.6 Summary: Free Enhancements
+
+| Feature | Cost | Recommendation |
+|---------|------|----------------|
+| Arcade | Free | ✅ Required |
+| DeepSeek | Free tier | ✅ Default LLM |
+| Groq | Free tier | ✅ STT + Vision |
+| Telegram | Free | ✅ Interface |
+| Pydantic Settings | Free | ✅ Recommended |
+| Structured Outputs | Free | ✅ Recommended |
+| Custom Exceptions | Free | ✅ Recommended |
+
+---
+
+### E.7 Free Voice (Alternative to ElevenLabs)
+
+**FastRTC + Groq Voice Agent** - Real-time voice conversations using free Groq APIs.
+
+**Reference:** `fastrtc-groq-voice-agent/` project
+
+**How it works:**
+1. **STT:** Groq Whisper (free) - speech-to-text
+2. **LLM:** Groq Llama (free) - generate response
+3. **TTS:** Groq PlayAI TTS (free) - text-to-speech
+
+**Key files from reference project:**
+
+```python
+# src/fastrtc_groq_voice_stream.py
+from fastrtc import Stream, ReplyOnPause, AlgoOptions
+groq_client = Groq()
+
+def response(audio):
+    # Transcribe audio with Groq Whisper
+    transcript = groq_client.audio.transcriptions.create(
+        model="whisper-large-v3-turbo",
+        file=("audio.mp3", audio_to_bytes(audio)),
+    )
+    
+    # Generate response with agent
+    agent_response = agent.invoke({"messages": [{"role": "user", "content": transcript}]})
+    
+    # TTS with Groq PlayAI (free alternative to ElevenLabs)
+    tts_response = groq_client.audio.speech.create(
+        model="playai-tts",
+        voice="Celeste-PlayAI",  # Or other PlayAI voices
+        input=response_text,
+    )
+    yield from process_groq_tts(tts_response)
+
+# Create stream with web UI or phone interface
+stream = Stream(
+    modality="audio",
+    mode="send-receive",
+    handler=ReplyOnPause(response, algo_options=AlgoOptions(speech_threshold=0.5)),
+)
+stream.ui.launch()  # Web UI
+# or: stream.fastphone()  # Phone interface
+```
+
+**Available voices (Groq PlayAI TTS):**
+- `Celeste-PlayAI`
+- `Arabella-PlayAI`
+- `Mick-PlayAI`
+- `Ella-PlayAI`
+- `Jordan-PlayAI`
+
+**Install dependencies:**
+```bash
+pip install fastrtc groq
+```
+
+**Integration with jayla-pa:**
+1. Add voice input handler to telegram_bot/
+2. Use `speech_to_text.transcribe()` for Telegram voice messages (already exists)
+3. For real-time voice: add FastRTC server alongside webhook
+
+**Cost:** Free (Groq free tier)
+
+---
+| ElevenLabs | Paid | ❌ Skip |
+| Together AI | Paid | ❌ Skip |
+| Chainlit | Free | ❌ Not needed |
+| WhatsApp | Free | ❌ Not needed |
+
+---
+
+*Free-only enhancements section. Paid features removed.*
